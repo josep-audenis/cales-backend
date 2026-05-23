@@ -18,11 +18,6 @@ from app.agent.tools import ALL_TOOLS, _run_recommendation
 from app.core.config import settings
 
 log = logging.getLogger("app.agent")
-if not log.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s | %(message)s"))
-    log.addHandler(handler)
-log.setLevel(logging.INFO)
 
 try:
     from agents import Agent, Runner, set_tracing_disabled  # type: ignore
@@ -42,6 +37,12 @@ class AgentRunResult:
     answer: str
     tool_calls: list[dict[str, Any]]
     raw: Any | None = None
+    decision: dict[str, Any] | None = None
+    signals: list[dict[str, Any]] | None = None
+    evidence_urls: list[str] | None = None
+    forecast_points: list[dict[str, Any]] | None = None
+    spot_price: float | None = None
+    spot_date: Any | None = None
 
 
 def _make_model() -> Any:
@@ -128,6 +129,12 @@ async def run_agent(message: str, context: dict[str, Any] | None = None) -> Agen
                     "timings": orch.timings,
                     "subagent_outputs": orch.raw,
                 },
+                decision=orch.decision,
+                signals=orch.signals,
+                evidence_urls=orch.evidence_urls,
+                forecast_points=orch.forecast_points,
+                spot_price=orch.spot_price,
+                spot_date=orch.spot_date,
             )
         except Exception:
             log.exception("Orchestrator failed — falling back to single-agent path")
@@ -183,5 +190,5 @@ async def _run_with(message: str, ctx: dict[str, Any], mcp_servers: list[Any]) -
     tool_calls = _extract_tool_calls(result)
     log.info("Runner.run done in %.2fs | tool_calls=%d", dt, len(tool_calls))
     for tc in tool_calls:
-        log.info("  tool: %s args=%s", tc.get("tool"), str(tc.get("args"))[:200])
+        log.debug("  tool: %s args=%s", tc.get("tool"), str(tc.get("args"))[:200])
     return AgentRunResult(answer=str(result.final_output), tool_calls=tool_calls, raw=result)

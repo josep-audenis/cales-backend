@@ -45,3 +45,6 @@ pytest*.log
 .venv
 .claude
 .env
+
+scripts/
+scratch/
