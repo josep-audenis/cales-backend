@@ -256,7 +256,7 @@ def list_capabilities(noop: str = "") -> dict[str, Any]:
         "capabilities": [
             "Recommend BUY_NOW / WAIT / HEDGE / MONITOR for raw materials",
             "Explain drivers and counter-drivers with evidence sources",
-            "Generate one base-case analysis per request",
+            "Run what-if scenarios and compare materials",
             "Pull live market intelligence from Cala via MCP",
         ],
         "materials": [m.value for m in MaterialKey],

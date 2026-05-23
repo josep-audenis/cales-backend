@@ -222,27 +222,15 @@ async def run_orchestrator(message: str, ctx: dict[str, Any]) -> OrchestratorRes
     material = ctx.get("material", "barley")
     priority = ctx.get("priority_profile", "balanced")
     horizon = int(ctx.get("horizon_days", 180))
-    request_payload = {
-        "material": material,
-        "horizon_days": horizon,
-        "horizon_label": ctx.get("horizon_label"),
-        "priority_profile": priority,
-        "requested_at": ctx.get("requested_at"),
-        "context": ctx.get("context"),
-        "include_market_drivers": ctx.get("include_market_drivers", True),
-        "analysis_type": ctx.get("analysis_type", "base_case"),
-    }
-    request_json = json.dumps(request_payload)
 
     timings: dict[str, float] = {}
     tool_calls: list[dict[str, Any]] = []
 
     # ----- Phase 1: Fundamentals + CalaSignal in parallel -----
     fundamentals_prompt = (
-        f"Compute fundamentals for material={material}. Lookback 365 days.\n"
-        f"REQUEST_JSON={request_json}"
+        f"Compute fundamentals for material={material}. Lookback 365 days."
     )
-    cala_prompt = f"Pull Cala signals for material={material}.\nREQUEST_JSON={request_json}"
+    cala_prompt = f"Pull Cala signals for material={material}."
 
     fundamentals_agent = _make_fundamentals_agent()
     cala_signal_agent = _make_cala_signal_agent()
@@ -331,7 +319,6 @@ async def run_orchestrator(message: str, ctx: dict[str, Any]) -> OrchestratorRes
     }
     explanation_prompt = (
         f"Compose user-facing card. material={material} priority={priority} horizon_days={horizon}\n"
-        f"REQUEST_JSON={request_json}\n"
         f"DECISION={json.dumps(slim_decision)}\n"
         f"SIGNALS={json.dumps(slim_signals)}\n"
         f"EVIDENCE_URLS={json.dumps(evidence_urls[:8])}\n"
