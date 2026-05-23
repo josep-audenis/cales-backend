@@ -9,3 +9,4 @@ openai-agents>=0.0.10
 pandas>=2.2
 numpy>=1.26
 yfinance
+sqlmodel>=0.0.21

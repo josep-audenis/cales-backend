@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     cala_mcp_url: str = "https://api.cala.ai/mcp/"
     cala_mcp_api_key: str = ""
 
+    # Database
+    database_url: str = "sqlite:///./cales.db"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

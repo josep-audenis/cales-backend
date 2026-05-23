@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.api.routes import agent, forecasts, health, materials, recommendations, signals, prices
 from app.core.config import settings
+from app.db.session import create_tables
 
 
 def _configure_logging() -> None:
@@ -21,6 +22,7 @@ _configure_logging()
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug)
+    app.add_event_handler("startup", create_tables)
     app.include_router(health.router)
     app.include_router(materials.router)
     app.include_router(forecasts.router)
