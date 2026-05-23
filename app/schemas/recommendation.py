@@ -16,6 +16,12 @@ class Driver(BaseModel):
     source: str
     note: str | None = None
 
+class DriverInfo(BaseModel):
+    driver_key: str
+    category: str
+    description: str
+
+
 
 class ForecastBrief(BaseModel):
     expected_change_pct: float
@@ -34,3 +40,7 @@ class Recommendation(BaseModel):
     forecast_summary: ForecastBrief
     main_drivers: list[Driver]
     explanation: str
+    active_drivers: list[DriverInfo] = Field(default_factory=list)
+    dormant_drivers: list[DriverInfo] = Field(default_factory=list)
+    cross_material_dependencies: list[str] = Field(default_factory=list)
+

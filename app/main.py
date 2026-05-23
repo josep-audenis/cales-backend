@@ -12,10 +12,13 @@ def _configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s | %(message)s",
     )
-    # Ensure our namespaces are always INFO regardless of root level.
-    for name in ("app", "app.agent", "app.agent.orchestrator", "app.agent.tools", "app.clients.hf_tgi"):
-        logging.getLogger(name).setLevel(logging.INFO)
+    # Turn down noisy loggers
+    for name in ("httpx", "httpcore", "watchfiles.main", "mcp.client.streamable_http", "app.clients.hf_tgi", "app.agent.tools"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Keep high-level orchestrator logs
+    for name in ("app.agent", "app.agent.orchestrator"):
+        logging.getLogger(name).setLevel(logging.INFO)
 
 _configure_logging()
 

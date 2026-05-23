@@ -102,8 +102,54 @@ def _retrieve_entity(uuid: str, properties: list[str], relationships: dict[str, 
     )
 
 
-def _knowledge_query(q: str) -> dict[str, Any]:
-    return _post("/knowledge/query", {"input": q, "return_entities": False})
+def _knowledge_search(q: str, explainability: bool = True) -> dict[str, Any]:
+    return _post("/knowledge/search", {"input": q, "explainability": explainability, "return_entities": False})
+
+
+def _extract_urls(data: dict[str, Any]) -> list[str]:
+    """Pull all citable URLs from knowledge_search context[].origins[].document.url."""
+    seen: set[str] = set()
+    urls: list[str] = []
+    for ctx in (data.get("context") or []):
+        for origin in (ctx.get("origins") or []):
+            doc = origin.get("document") or {}
+            url = doc.get("url") if isinstance(doc, dict) else None
+            if url and isinstance(url, str) and url.startswith("http") and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def _extract_source_names(data: dict[str, Any]) -> list[str]:
+    """Unique publisher names from knowledge_search context origins."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for ctx in (data.get("context") or []):
+        for origin in (ctx.get("origins") or []):
+            name = (origin.get("source") or {}).get("name")
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
+
+
+def _score_from_explainability(data: dict[str, Any], bullish_kw: tuple[str, ...], bearish_kw: tuple[str, ...]) -> tuple[str, float]:
+    """Score direction from explainability claims. Returns (direction, score)."""
+    bull = 0
+    bear = 0
+    for exp in (data.get("explainability") or []):
+        text = (exp.get("content") or "").lower()
+        for kw in bullish_kw:
+            if kw in text:
+                bull += 1
+        for kw in bearish_kw:
+            if kw in text:
+                bear += 1
+    if bull > bear:
+        return Direction.BULLISH.value, min(60.0 + 5.0 * (bull - bear), 80.0)
+    if bear > bull:
+        return Direction.BEARISH.value, min(60.0 + 5.0 * (bear - bull), 80.0)
+    return Direction.NEUTRAL.value, 45.0
 
 
 def _now_iso() -> str:
@@ -144,9 +190,7 @@ def _signal(
 # ---------------------------------------------------------------------------
 
 
-@function_tool
-def cala_producer_graph(material: str) -> dict[str, Any]:
-    """Pull producers via Product.MANUFACTURED_BY. Returns concentration signal + evidence URLs."""
+def _cala_producer_graph_impl(material: str) -> dict[str, Any]:
     cache = MATERIAL_UUIDS.get(material)
     if not cache or "product" not in cache:
         return {"error": f"no product UUID cached for {material}"}
@@ -193,7 +237,7 @@ def cala_producer_graph(material: str) -> dict[str, Any]:
             break
 
     sig = _signal(
-        name="cala_producer_concentration",
+        name="supply_chain",
         direction=direction,
         score=score,
         confidence=60.0,
@@ -204,54 +248,59 @@ def cala_producer_graph(material: str) -> dict[str, Any]:
     return {"signal": sig}
 
 
+@function_tool
+def cala_producer_graph(material: str) -> dict[str, Any]:
+    """Pull producers via Product.MANUFACTURED_BY. Returns concentration signal + evidence URLs."""
+    return _cala_producer_graph_impl(material)
+
+
 # ---------------------------------------------------------------------------
 # B. Disruption / chokepoint
 # ---------------------------------------------------------------------------
 
 
-@function_tool
-def cala_disruption_scan(material: str, year: int = 2026) -> dict[str, Any]:
-    """Knowledge_query for supply disruptions + chokepoint contagion. Bullish if material flagged."""
+_DISRUPTION_BULLISH = ("disruption", "shortage", "sanction", "conflict", "war", "strike", "curtailment", "halt", "outage", "tariff")
+_DISRUPTION_BEARISH = ("recovery", "easing", "surplus", "ample supply", "oversupply")
+
+
+def _cala_disruption_scan_impl(material: str, year: int = 2026) -> dict[str, Any]:
     name = MATERIAL_QUERY_NAME.get(material, material)
-    queries = [
-        f"{name} supply disruption {year}",
-        f"Strait of Hormuz disruption affected commodities",
-    ]
-    hits: list[dict[str, Any]] = []
-    for q in queries:
+    evidence_urls: list[str] = []
+    direction = Direction.NEUTRAL.value
+    score = 40.0
+
+    for q in [
+        f"{name} supply disruption geopolitical risk {year}",
+        f"{name} supply chain shortage sanctions {year}",
+    ]:
         try:
-            data = _knowledge_query(q)
+            data = _knowledge_search(q)
         except Exception:
             log.exception("disruption_scan query failed: %s", q)
             continue
-        for row in data.get("results", []) or []:
-            if isinstance(row, dict) and not row.get("error"):
-                hits.append({"query": q, **row})
+        for url in _extract_urls(data):
+            if url not in evidence_urls:
+                evidence_urls.append(url)
+        d, s = _score_from_explainability(data, _DISRUPTION_BULLISH, _DISRUPTION_BEARISH)
+        if s > score:
+            direction, score = d, s
 
-    # Heuristic: any hit mentioning material → bullish
-    name_l = name.lower()
-    relevant = [h for h in hits if name_l in str(h).lower()]
-    if relevant:
-        sig = _signal(
-            name="cala_supply_disruption",
-            direction=Direction.BULLISH.value,
-            score=72.0,
-            confidence=55.0,
-            horizon_days=120,
-            evidence=[],  # narrative-only — no per-row URLs in knowledge_query
-            extra={"hit_count": len(relevant)},
-        )
-    else:
-        sig = _signal(
-            name="cala_supply_disruption",
-            direction=Direction.NEUTRAL.value,
-            score=40.0,
-            confidence=30.0,
-            horizon_days=120,
-            evidence=[],
-            extra={"hit_count": 0},
-        )
+    evidence_urls = evidence_urls[:6]
+    sig = _signal(
+        name="geopolitical_risk",
+        direction=direction,
+        score=score,
+        confidence=55.0 if evidence_urls else 30.0,
+        horizon_days=120,
+        evidence=evidence_urls,
+    )
     return {"signal": sig}
+
+
+@function_tool
+def cala_disruption_scan(material: str, year: int = 2026) -> dict[str, Any]:
+    """Knowledge_query for supply disruptions + chokepoint contagion. Bullish if material flagged."""
+    return _cala_disruption_scan_impl(material, year)
 
 
 # ---------------------------------------------------------------------------
@@ -259,46 +308,117 @@ def cala_disruption_scan(material: str, year: int = 2026) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@function_tool
-def cala_weather_signal(material: str, region: str = "Europe", year: int = 2025) -> dict[str, Any]:
-    """Crop weather events. Agri-only (barley, wheat). Drought/frost/flood → bullish price."""
+_WEATHER_BULLISH = ("drought", "frost", "flood", "disease", "crop failure", "poor harvest", "heat stress")
+_WEATHER_BEARISH = ("ample rain", "recovery", "favorable", "strong yield", "bumper crop", "good harvest")
+
+
+def _cala_weather_signal_impl(material: str, region: str = "Europe", year: int = 2025) -> dict[str, Any]:
     if material not in {"barley", "wheat"}:
         return {"signal": None, "note": f"weather_signal not applicable to {material}"}
 
-    q = f"weather events affecting {material} harvest {region} {year}"
     try:
-        data = _knowledge_query(q)
+        data = _knowledge_search(f"{material} harvest weather conditions {region} {year}")
     except Exception as e:
         log.exception("weather_signal failed")
         return {"error": str(e)}
 
-    rows = [r for r in (data.get("results") or []) if isinstance(r, dict) and not r.get("error")]
-    bullish_kw = ("drought", "frost", "flood", "disease", "whiplash")
-    bearish_kw = ("ample rain", "recovery", "favorable", "strong yield")
-    bull_hits = sum(1 for r in rows for kw in bullish_kw if kw in str(r).lower())
-    bear_hits = sum(1 for r in rows for kw in bearish_kw if kw in str(r).lower())
-
-    if bull_hits > bear_hits:
-        direction = Direction.BULLISH.value
-        score = 60.0 + min(20.0, 5.0 * (bull_hits - bear_hits))
-    elif bear_hits > bull_hits:
-        direction = Direction.BEARISH.value
-        score = 60.0 + min(20.0, 5.0 * (bear_hits - bull_hits))
-    else:
-        direction, score = Direction.NEUTRAL.value, 45.0
-
+    evidence_urls = _extract_urls(data)[:5]
+    direction, score = _score_from_explainability(data, _WEATHER_BULLISH, _WEATHER_BEARISH)
     sig = _signal(
-        name="cala_weather",
+        name="weather",
         direction=direction,
         score=score,
-        confidence=50.0,
+        confidence=50.0 if evidence_urls else 35.0,
         horizon_days=90,
-        evidence=[],
+        evidence=evidence_urls,
         extra={"region": region, "year": year},
     )
     return {"signal": sig}
 
 
-CALA_TOOLS = [cala_producer_graph, cala_disruption_scan, cala_weather_signal]
+@function_tool
+def cala_weather_signal(material: str, region: str = "Europe", year: int = 2025) -> dict[str, Any]:
+    """Crop weather events. Agri-only (barley, wheat). Drought/frost/flood → bullish price."""
+    return _cala_weather_signal_impl(material, region, year)
+
+
+# ---------------------------------------------------------------------------
+# D. Dynamic Registry Signals
+# ---------------------------------------------------------------------------
+
+def _cala_dynamic_signals_impl(material: str, region: str = "Europe", year: int = 2026) -> dict[str, Any]:
+    from app.features.driver_registry import get_material_drivers
+
+    drivers = get_material_drivers(material)
+    signals = []
+
+    for d_key, d_conf in drivers.items():
+        q = d_conf["query_template"].format(region=region, year=year)
+        try:
+            data = _knowledge_search(q)
+        except Exception:
+            log.exception("dynamic signal failed for %s", d_key)
+            continue
+
+        evidence_urls = _extract_urls(data)[:5]
+        bullish_kw = tuple(d_conf.get("bullish_keywords") or ())
+        bearish_kw = tuple(d_conf.get("bearish_keywords") or ())
+        direction, score = _score_from_explainability(data, bullish_kw, bearish_kw)
+
+        sig = _signal(
+            name=d_conf["weight_key"],
+            direction=direction,
+            score=score,
+            confidence=50.0 if evidence_urls else 35.0,
+            horizon_days=d_conf.get("horizon_days", 90),
+            evidence=evidence_urls,
+            extra={"region": region, "year": year, "driver_key": d_key},
+        )
+        signals.append(sig)
+        
+    return {"signals": signals}
+
+
+@function_tool
+def cala_dynamic_signals(material: str, region: str = "Europe", year: int = 2026) -> dict[str, Any]:
+    """Pull all dynamic signals for the material defined in the driver registry."""
+    return _cala_dynamic_signals_impl(material, region, year)
+
+
+def gather_cala_signals(material: str, region: str = "Europe", year: int = 2026) -> dict[str, Any]:
+    """Deterministic synchronous gather of all Cala signals + evidence URLs. No LLM."""
+    signals: list[dict[str, Any]] = []
+    evidence_urls: list[str] = []
+
+    prod = _cala_producer_graph_impl(material)
+    if prod and prod.get("signal"):
+        signals.append(prod["signal"])
+        evidence_urls.extend(prod["signal"].get("evidence") or [])
+
+    disr = _cala_disruption_scan_impl(material, year=year)
+    if disr and disr.get("signal"):
+        signals.append(disr["signal"])
+
+    if material in {"barley", "wheat"}:
+        wx = _cala_weather_signal_impl(material, region=region, year=year - 1)
+        if wx and wx.get("signal"):
+            signals.append(wx["signal"])
+
+    dyn = _cala_dynamic_signals_impl(material, region=region, year=year)
+    for s in dyn.get("signals") or []:
+        signals.append(s)
+
+    # dedupe URLs
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for u in evidence_urls:
+        if u and u not in seen:
+            seen.add(u)
+            deduped.append(u)
+
+    return {"signals": signals, "evidence_urls": deduped}
+
+
+CALA_TOOLS = [cala_producer_graph, cala_disruption_scan, cala_weather_signal, cala_dynamic_signals]
 
 __all__ = ["CALA_TOOLS", "MATERIAL_UUIDS", "MATERIAL_QUERY_NAME"]

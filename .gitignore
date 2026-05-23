@@ -46,5 +46,7 @@ pytest*.log
 .claude
 .env
 
+scripts/
+scratch/
 .before_deploy*
 .timesfm

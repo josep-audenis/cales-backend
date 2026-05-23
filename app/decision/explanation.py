@@ -60,3 +60,34 @@ def build_explanation(
     change_pct = summary.expected_change_pct
     change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
     return template.format(change=change_str, horizon=horizon_days, conf=confidence)
+
+def enrich_driver_context(material: str, signals: list[Signal]) -> dict[str, list]:
+    from app.features.driver_registry import get_material_drivers
+    registry = get_material_drivers(material)
+    
+    active_drivers = []
+    dormant_drivers = []
+    deps = set()
+    
+    active_keys = {s.name for s in signals if abs(s.score) > 50}
+    
+    for d_key, d_conf in registry.items():
+        w_key = d_conf["weight_key"]
+        info = {
+            "driver_key": d_key,
+            "category": d_conf.get("category", ""),
+            "description": d_conf.get("description", "")
+        }
+        if w_key in active_keys:
+            active_drivers.append(info)
+        else:
+            dormant_drivers.append(info)
+            
+        for dep in d_conf.get("dependencies", []):
+            deps.add(f"{dep} -> {material}")
+            
+    return {
+        "active_drivers": active_drivers,
+        "dormant_drivers": dormant_drivers,
+        "cross_material_dependencies": list(deps)
+    }

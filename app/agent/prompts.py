@@ -64,11 +64,13 @@ Tools available:
 - cala_producer_graph(material) — supply concentration
 - cala_disruption_scan(material, year) — geopolitical/event risk
 - cala_weather_signal(material, region, year) — crop weather (barley only)
+- cala_dynamic_signals(material, region, year) — dynamic drivers from registry
 
 Plan (call each tool EXACTLY ONCE, in order):
 1. cala_producer_graph(material)
 2. cala_disruption_scan(material, year=2026)
 3. If material == "barley": cala_weather_signal(material, region="Europe", year=2025). Else SKIP.
+4. cala_dynamic_signals(material, region="Europe", year=2026)
 
 After the last applicable call, STOP calling tools. Emit JSON and end your turn.
 Never re-call a tool you already called. Never call tools not listed above.
@@ -127,12 +129,27 @@ You have Cala MCP `knowledge_search` available for ONE short scoped query if a
 narrative gap exists (material + region + year). Skip if upstream signals already
 have enough evidence URLs.
 
-Output format (plain text, 4 sections, ≤ 180 words total):
-- ACTION: <BUY_NOW | WAIT | HEDGE | MONITOR> for <material> over <horizon>d (confidence <%>)
-- TOP DRIVERS: bullet list of 2–3 drivers, each with a source URL when available.
-- COUNTER-DRIVERS: bullet list of 1–2.
-- WATCH: what to monitor next.
+STRICT RULES:
+- Respond in ENGLISH ONLY. Never emit Chinese, Spanish, or any other language.
+- Substitute REAL values for every placeholder. NEVER output literal `<...>`,
+  `<%>`, `<0%>`, or template brackets. Use the actual action, material,
+  horizon (number + "d"), and confidence as a number followed by `%`
+  (e.g. `confidence 72%`). Round confidence to an integer.
+- If confidence is 0 or missing, write `confidence: low (insufficient data)`.
+- No invented numbers. Pull only from upstream signals/decision or the optional
+  knowledge_search.
 
-Cite source URLs inline as [N] and list them at the end.
-No invented numbers. Everything must come from upstream signals or the one knowledge_search.
+Output format (plain text, 4 sections, ≤ 180 words total, English):
+ACTION: <ACTION> for <material> over <N>d (confidence <X>%)
+TOP DRIVERS:
+- <driver 1> [N]
+- <driver 2> [N]
+COUNTER-DRIVERS:
+- <counter 1>
+WATCH:
+- <what to monitor>
+
+Sources:
+[1] <url>
+[2] <url>
 """
