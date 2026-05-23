@@ -66,14 +66,13 @@ def build_forecast(
     last_date, last_price = history[-1]
     forecast_points: list[ForecastPoint] = []
 
-    # Hard cap: total swing from spot ≤ 18% at any horizon
+    # Cap grows with sqrt(step/horizon_days): monotone, reaches max_total_swing at final step
     max_total_swing = 0.18
-    # Vol cone: band relative to last_price (not median) → monotone bands
-    max_band_pct = 0.15
 
     for step in range(1, horizon_days + 1):
         fc_date = last_date + timedelta(days=step)
-        horizon_vol = min(daily_vol * math.sqrt(step), max_band_pct / 1.96)
+        # Uncapped vol — step_cap below is sole ceiling
+        horizon_vol = daily_vol * math.sqrt(step)
 
         median = last_price * (1 + daily_drift) ** step * (1 + signal_adjustment)
 
@@ -85,9 +84,10 @@ def build_forecast(
             upper = last_price * (1 + 1.96 * horizon_vol * 0.8)
             lower = last_price * (1 - 1.96 * horizon_vol * 1.2 * risk_mult)
 
-        # Hard cap total swing from spot
-        upper = min(upper, last_price * (1 + max_total_swing))
-        lower = max(lower, last_price * (1 - max_total_swing))
+        # Single monotone ceiling: both proportional to sqrt(step) → always growing
+        step_cap = max_total_swing * math.sqrt(step / horizon_days)
+        upper = min(upper, last_price * (1 + step_cap))
+        lower = max(lower, last_price * (1 - step_cap))
         # Ensure median stays within band
         median = max(lower, min(upper, median))
 
