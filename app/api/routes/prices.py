@@ -30,11 +30,60 @@ SOURCES = {
     "pet":       "Yahoo Finance BZ=F (Brent crude proxy)",
 }
 
+BARLEY_CSV      = "app/data/train.csv"
+BARLEY_MAX_DATE = datetime(2025, 11, 2)   # hardcoded fallback if CSV read fails
+
+
+# ── Date helpers ──────────────────────────────────────────────────────────────
+
+def _barley_max_date() -> datetime:
+    """Return the last date in the barley CSV, falling back to the hardcoded value."""
+    try:
+        df = pd.read_csv(BARLEY_CSV, parse_dates=["ds"])
+        return df["ds"].max().to_pydatetime()
+    except Exception:
+        return BARLEY_MAX_DATE
+
+
+def _resolve_dates(end_date: str | None, days_back: int,
+                   is_barley: bool) -> tuple[datetime, datetime]:
+    """
+    Resolve (start, end) from the user-facing params.
+    - end_date: YYYY-MM-DD string or None (defaults to today / barley max)
+    - days_back: positive int, how many days to go back from end
+    - is_barley: if True, ceiling is the last date in the CSV
+    """
+    today    = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    ceiling  = _barley_max_date() if is_barley else today
+
+    if end_date is not None:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="Invalid end_date format — use YYYY-MM-DD.")
+        if end > ceiling:
+            if is_barley:
+                end = ceiling          # silently clamp to last available barley date
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"end_date {end.date()} is in the future. "
+                        f"Maximum allowed: {ceiling.date()}."
+                    ),
+                )
+    else:
+        end = ceiling
+
+    start = end - timedelta(days=days_back)
+    return start, end
+
 
 # ── 1. BARLEY ─────────────────────────────────────────────────────────────────
 
 def fetch_barley(start: datetime, end: datetime) -> pd.DataFrame:
-    df = pd.read_csv("app/data/train.csv", parse_dates=["ds"])[["ds", "y"]]
+    df = pd.read_csv(BARLEY_CSV, parse_dates=["ds"])[["ds", "y"]]
     df.columns = ["date", "price"]
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna().sort_values("date").reset_index(drop=True)
@@ -75,11 +124,6 @@ def fetch_aluminium(start: datetime, end: datetime) -> pd.DataFrame:
 # ── 3. ENERGY — OMIE official ─────────────────────────────────────────────────
 
 def fetch_energy(start: datetime, end: datetime) -> pd.DataFrame:
-    """
-    Fetch Spanish electricity day-ahead price from OMIE
-    using the OMIEData package (pip install OMIEData).
-    Official source — no API key needed.
-    """
     try:
         from OMIEData.DataImport.omie_marginalprice_importer import (
             OMIEMarginalPriceFileImporter,
@@ -93,11 +137,9 @@ def fetch_energy(start: datetime, end: datetime) -> pd.DataFrame:
         df_raw = importer.read_to_dataframe(
             data_type=DataTypeInMarginalPriceFile.PRICE_SPAIN
         )
-
         if df_raw.empty:
             raise ValueError("OMIEData returned empty dataframe")
 
-        # OMIEData returns hourly data — aggregate to daily mean
         df_raw["date"] = pd.to_datetime(df_raw["DATETIME"]).dt.normalize()
         df_daily = (
             df_raw.groupby("date")["VALUE"]
@@ -110,9 +152,7 @@ def fetch_energy(start: datetime, end: datetime) -> pd.DataFrame:
         mask = (df_daily["date"] >= pd.Timestamp(start)) & \
                (df_daily["date"] <= pd.Timestamp(end))
         df = df_daily[mask].reset_index(drop=True)
-
         if not df.empty:
-            print(f"  OMIE: {len(df)} daily points")
             return df
 
     except ImportError:
@@ -120,7 +160,6 @@ def fetch_energy(start: datetime, end: datetime) -> pd.DataFrame:
     except Exception as e:
         print(f"  OMIE failed: {e}")
 
-    # Fallback: Yahoo Finance natural gas (correlated with Spanish electricity)
     print("  Falling back to Yahoo Finance NG=F...")
     df = yf.download(
         "NG=F",
@@ -199,23 +238,33 @@ def compute_current(df: pd.DataFrame) -> dict:
     }
 
 
-def compute_historical(df: pd.DataFrame, range_label: str) -> dict:
+def compute_historical(df: pd.DataFrame, start: datetime, end: datetime) -> dict:
     points = [
         {"date": row["date"].strftime("%Y-%m-%d"), "value": round(float(row["price"]), 2)}
         for _, row in df.iterrows()
     ]
-    return {"range": range_label, "points": points}
+    return {
+        "start":  start.strftime("%Y-%m-%d"),
+        "end":    end.strftime("%Y-%m-%d"),
+        "points": points,
+    }
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/prices/{commodity}")
 def get_prices(
-    commodity:   str,
-    start_date:  str = Query(default=None, description="YYYY-MM-DD. Defaults to 6 months ago."),
-    end_date:    str = Query(default=None, description="YYYY-MM-DD. Defaults to today."),
-    range_label: str = Query(default="6m"),
+    commodity: str,
+    days_back: int  = Query(default=180, description="Number of days to look back. Must be a positive integer."),
+    end_date:  str  = Query(default=None, description="End date YYYY-MM-DD. Cannot be in the future. Defaults to today (or last CSV date for barley)."),
 ) -> dict:
+
+    # Validate days_back
+    if days_back <= 0:
+        raise HTTPException(status_code=400,
+                            detail="days_back must be a positive integer.")
+
+    # Validate commodity
     key = commodity.lower().strip()
     if key not in COMMODITY_MAP:
         raise HTTPException(
@@ -223,28 +272,18 @@ def get_prices(
             detail=f"Unknown commodity '{commodity}'. "
                    f"Valid: {sorted(set(COMMODITY_MAP.keys()))}",
         )
-    try:
-        end   = datetime.strptime(end_date,   "%Y-%m-%d") if end_date   else datetime.now()
-        start = datetime.strptime(start_date, "%Y-%m-%d") if start_date else end - timedelta(days=180)
-        if COMMODITY_MAP[key] == "barley":
-            df_csv = pd.read_csv("app/data/train.csv", parse_dates=["ds"])
-            csv_end   = df_csv["ds"].max()
-            csv_start = csv_end - timedelta(days=180)
-            end   = datetime.strptime(end_date,   "%Y-%m-%d") if end_date   else csv_end.to_pydatetime()
-            start = datetime.strptime(start_date, "%Y-%m-%d") if start_date else csv_start.to_pydatetime()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
 
-    if start > end:
-        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    canonical  = COMMODITY_MAP[key]
+    is_barley  = canonical == "barley"
+    start, end = _resolve_dates(end_date, days_back, is_barley)
 
-    canonical = COMMODITY_MAP[key]
     try:
         df = FETCHERS[canonical](start, end)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch '{commodity}': {str(e)}")
+        raise HTTPException(status_code=502,
+                            detail=f"Failed to fetch '{commodity}': {str(e)}")
 
     if df.empty:
         raise HTTPException(
@@ -257,5 +296,5 @@ def get_prices(
         "unit":           UNITS[canonical],
         "source":         SOURCES[canonical],
         "current":        compute_current(df),
-        "historicalData": compute_historical(df, range_label),
+        "historicalData": compute_historical(df, start, end),
     }
