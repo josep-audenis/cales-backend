@@ -285,6 +285,14 @@ def _build_evidence(
         from urllib.parse import urlparse as _up
         path_parts = [p for p in _up(url).path.split("/") if p]
         slug = path_parts[-1] if path_parts else ""
+        # Strip file extension (.html, .php, etc.)
+        slug = re.sub(r"\.[a-z]{2,4}$", "", slug, flags=re.IGNORECASE)
+        # Strip trailing numeric or hex IDs (≥6 chars, e.g. -200678325 or -b1e9fdae)
+        slug = re.sub(r"[-_][0-9a-f]{6,}$", "", slug, flags=re.IGNORECASE)
+        # Strip trailing short dangling word left after ID removal (e.g. "at", "in")
+        slug = re.sub(r"[-_]\w{1,3}$", "", slug)
+        # Strip leading numeric prefix (e.g. "103909247-Tsingshan...")
+        slug = re.sub(r"^\d+[-_]?", "", slug)
         slug_title = slug.replace("-", " ").replace("_", " ").title()[:80] if slug else src_name
         base_explanation = SIGNAL_EXPLANATIONS.get(src_signal or "", "Market intelligence from external source.")
         article_title = slug_title or f"{src_name} article"

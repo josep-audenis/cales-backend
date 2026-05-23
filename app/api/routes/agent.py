@@ -2,11 +2,13 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.agent.analyze_builder import build_analyze_response
 from app.agent.runtime import run_agent
 from app.agent.ui_agent import run_ui_agent
+from app.reports import render_executive_pdf
 from app.schemas.analyze_response import AnalyzeResponse
 from app.schemas.common import MaterialKey, PriorityProfileKey
 from app.schemas.ui_agent import UIAgentRequest, UIAgentResponse
@@ -56,8 +58,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     return ChatResponse(answer=result.answer, tool_calls=result.tool_calls)
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+async def _run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     horizon_str = req.horizon_label or f"{req.horizon_days}d"
     wh = req.context.warehouse_fill_pct
     wh_str = f" Current warehouse fill: {wh}%." if wh is not None else ""
@@ -86,6 +87,24 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         spot_date=result.spot_date,
         tool_calls=result.tool_calls,
         answer_text=result.answer,
+    )
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+    return await _run_analyze(req)
+
+
+@router.post("/analyze/report")
+async def analyze_report(req: AnalyzeRequest, inline: bool = False) -> Response:
+    resp = await _run_analyze(req)
+    pdf = render_executive_pdf(resp)
+    filename = f"damm-report-{req.material.value}-{resp.generated_at.strftime('%Y%m%d-%H%M')}.pdf"
+    disp = "inline" if inline else "attachment"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{filename}"'},
     )
 
 

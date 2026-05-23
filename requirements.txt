@@ -10,3 +10,5 @@ pandas>=2.2
 numpy>=1.26
 yfinance
 sqlmodel>=0.0.21
+reportlab>=4.2
+matplotlib>=3.8
