@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Agent LLM (Groq via OpenAI-compatible API)
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    agent_model: str = "llama-3.3-70b-versatile"
+    agent_model: str = "llama-3.1-8b-instant"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -44,3 +44,4 @@ pytest*.log
 *.zip
 .venv
 .claude
+.env
