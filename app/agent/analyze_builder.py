@@ -48,9 +48,33 @@ RELIABILITY_BY_DOMAIN: dict[str, str] = {
     "fastmarkets.com": "high",
     "reuters.com": "high",
     "bloomberg.com": "high",
+    "wsj.com": "high",
+    "ft.com": "high",
+    "ing.com": "high",
     "stats.gov.cn": "medium",
     "thomasnet.com": "medium",
     "cala.ai": "medium",
+    "investing.com": "medium",
+    "cnbc.com": "medium",
+    "mining.com": "medium",
+    "metal.com": "medium",
+    "yahoo.com": "medium",
+    "oilandgas360.com": "medium",
+}
+
+SOURCE_NAME_OVERRIDES: dict[str, str] = {
+    "wsj.com": "WSJ",
+    "ft.com": "Financial Times",
+    "ing.com": "ING Think",
+    "reuters.com": "Reuters",
+    "bloomberg.com": "Bloomberg",
+    "lme.com": "LME",
+    "fastmarkets.com": "Fastmarkets",
+    "cnbc.com": "CNBC",
+    "investing.com": "Investing.com",
+    "mining.com": "Mining.com",
+    "metal.com": "Metal.com",
+    "oilandgas360.com": "OilAndGas360",
 }
 
 SIGNAL_LABELS: dict[str, str] = {
@@ -61,6 +85,11 @@ SIGNAL_LABELS: dict[str, str] = {
     "weather": "Weather / crop conditions",
     "inventory_pressure": "Warehouse stock drawdown",
     "energy_cost": "Energy cost pressure",
+    "energy_pressure": "Energy cost pressure",
+    "freight": "Freight & logistics cost",
+    "currency": "Currency / FX exposure",
+    "demand": "Demand-side pressure",
+    "china_demand": "China industrial demand",
 }
 
 SIGNAL_EXPLANATIONS: dict[str, str] = {
@@ -71,6 +100,11 @@ SIGNAL_EXPLANATIONS: dict[str, str] = {
     "weather": "Weather conditions affect crop yields and availability.",
     "inventory_pressure": "Lower stock coverage reduces the buffer against shocks.",
     "energy_cost": "Energy is a key input cost driving production economics.",
+    "energy_pressure": "Higher energy costs increase smelter and production expenses.",
+    "freight": "Shipping and logistics costs affect delivered material prices.",
+    "currency": "FX movements alter the effective cost of imported materials.",
+    "demand": "Demand-side shifts influence price equilibrium.",
+    "china_demand": "China drives ~50% of global metals demand; shifts move prices.",
 }
 
 
@@ -93,15 +127,21 @@ def _drv_id(name: str) -> str:
 def _domain(url: str) -> str:
     try:
         host = urlparse(url).hostname or ""
-        return host.lower().lstrip("www.")
+        host = host.lower()
+        return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
+
+
+def _domain_matches(domain: str, key: str) -> bool:
+    """Exact domain match or subdomain match. Avoids 'ing.com' matching 'investing.com'."""
+    return domain == key or domain.endswith("." + key)
 
 
 def _reliability(url: str) -> str:
     d = _domain(url)
     for key, rel in RELIABILITY_BY_DOMAIN.items():
-        if key in d:
+        if _domain_matches(d, key):
             return rel
     return "medium"
 
@@ -110,6 +150,11 @@ def _source_name(url: str) -> str:
     d = _domain(url)
     if not d:
         return "Unknown"
+    if d in SOURCE_NAME_OVERRIDES:
+        return SOURCE_NAME_OVERRIDES[d]
+    for key, name in SOURCE_NAME_OVERRIDES.items():
+        if _domain_matches(d, key):
+            return name
     parts = d.split(".")
     return parts[-2].capitalize() if len(parts) >= 2 else d
 
@@ -147,8 +192,61 @@ def _impact_bucket(score: float) -> str:
 # Section builders
 # ---------------------------------------------------------------------------
 
-def _build_evidence(signals: list[dict[str, Any]], extra_urls: list[str], spot_url: str | None, today: date) -> tuple[list[Evidence], dict[str, str]]:
-    """Return evidence list + url -> id map."""
+_INTERNAL_ORIGIN: dict[str, str] = {
+    "price_momentum": "momentum",
+    "seasonality": "seasonality",
+    "inventory_pressure": "warehouse",
+}
+
+
+def _internal_rationale(signal: dict[str, Any]) -> str:
+    name = signal.get("name") or ""
+    direction = signal.get("direction") or "neutral"
+    score = float(signal.get("score") or 0.0)
+    meta = signal.get("meta") or {}
+
+    if name == "price_momentum":
+        short_ma = meta.get("short_ma")
+        long_ma = meta.get("long_ma")
+        if short_ma and long_ma:
+            diff_pct = round((short_ma - long_ma) / long_ma * 100, 2)
+            trend = "above" if short_ma > long_ma else "below"
+            return (
+                f"Short-term MA ({short_ma:.0f}) is {trend} long-term MA ({long_ma:.0f}) "
+                f"by {abs(diff_pct):.1f}%, indicating {'upward' if direction == 'bullish' else 'downward'} momentum."
+            )
+        return f"Price momentum signal is {direction} (score {score:.0f}/100) based on moving average crossover."
+
+    if name == "seasonality":
+        month = meta.get("month") or ""
+        hist_avg = meta.get("historical_avg_pct")
+        if hist_avg is not None:
+            return (
+                f"Historical seasonality for {month or 'this period'}: average price change {hist_avg:+.1f}%. "
+                f"Pattern suggests {'upward' if direction == 'bullish' else 'downward'} pressure."
+            )
+        return f"Seasonal pattern signal is {direction} (score {score:.0f}/100) based on historical price cycles."
+
+    if name == "inventory_pressure":
+        fill = meta.get("fill_pct")
+        if fill is not None:
+            return (
+                f"Warehouse fill at {fill:.0f}%. "
+                f"{'Low stock increases supply risk and urgency.' if direction == 'bullish' else 'High stock reduces near-term buying urgency.'}"
+            )
+        return f"Inventory pressure is {direction} (score {score:.0f}/100) based on warehouse stock levels."
+
+    return f"{SIGNAL_LABELS.get(name, name)} signal is {direction} (score {score:.0f}/100)."
+
+
+def _build_evidence(
+    signals: list[dict[str, Any]],
+    extra_urls: list[str],
+    spot_url: str | None,
+    today: date,
+    warehouse_fill: float | None = None,
+) -> tuple[list[Evidence], dict[str, str]]:
+    """Return evidence list + (url|key) -> id map."""
     url_to_id: dict[str, str] = {}
     ev_list: list[Evidence] = []
     seen: set[str] = set()
@@ -163,8 +261,10 @@ def _build_evidence(signals: list[dict[str, Any]], extra_urls: list[str], spot_u
             date=today,
             reliability="high",
             url=spot_url,
+            evidence_origin="url",
+            evidence_rationale="Official LME spot price used as forecast anchor and base for all price path calculations.",
             signal_extracted="Reference spot price used as forecast anchor.",
-            used_for=[],
+            used_for=["market_context.spot_price", "base_case"],
         ))
         seen.add(spot_url)
 
@@ -176,41 +276,93 @@ def _build_evidence(signals: list[dict[str, Any]], extra_urls: list[str], spot_u
         except Exception:
             return False
 
-    def _add(url: str, src_signal: str | None, signal_source: str | None = None) -> None:
+    def _add_url(url: str, src_signal: str | None) -> None:
         if not url or not _is_valid_url(url) or url in seen:
-            return
-        # Only accept Cala-sourced signals or established market-data domains.
-        # Internal signals (source="Internal") never contribute evidence.
-        if signal_source == "Internal":
             return
         eid = _ev_id(url)
         url_to_id[url] = eid
         src_name = _source_name(url)
-        # Build title from URL path slug (last non-empty segment, humanized)
         from urllib.parse import urlparse as _up
         path_parts = [p for p in _up(url).path.split("/") if p]
         slug = path_parts[-1] if path_parts else ""
         slug_title = slug.replace("-", " ").replace("_", " ").title()[:80] if slug else src_name
+        base_explanation = SIGNAL_EXPLANATIONS.get(src_signal or "", "Market intelligence from external source.")
+        article_title = slug_title or f"{src_name} article"
+        rationale = f"{src_name}: \"{article_title}\" — {base_explanation}"
         ev_list.append(Evidence(
             id=eid,
             source=src_name,
-            title=slug_title or f"{src_name} article",
+            title=article_title,
             date=today,
             reliability=_reliability(url),
             url=url,
-            signal_extracted=SIGNAL_EXPLANATIONS.get(src_signal or "", "Market intelligence from external source."),
+            evidence_origin="url",
+            evidence_rationale=rationale,
+            signal_extracted=base_explanation,
             used_for=[],
         ))
         seen.add(url)
 
+    def _add_internal(signal: dict[str, Any]) -> str | None:
+        name = signal.get("name") or ""
+        origin = _INTERNAL_ORIGIN.get(name, "internal")
+        eid = f"ev_{name}"
+        if eid in seen:
+            return eid
+        rationale = _internal_rationale(signal)
+        label = SIGNAL_LABELS.get(name, name.replace("_", " ").capitalize())
+        ev_list.append(Evidence(
+            id=eid,
+            source="Internal computation",
+            title=label,
+            date=today,
+            reliability="medium",
+            url="",
+            evidence_origin=origin,  # type: ignore[arg-type]
+            evidence_rationale=rationale,
+            signal_extracted=rationale,
+            used_for=[],
+        ))
+        seen.add(eid)
+        url_to_id[eid] = eid
+        return eid
+
     for s in signals:
         name = s.get("name") or ""
-        signal_source = s.get("source")
-        for url in (s.get("evidence") or []):
-            _add(url, name, signal_source)
+        signal_source = (s.get("source") or "").lower()
+        urls = s.get("evidence") or []
+        if signal_source == "internal" or not urls:
+            _add_internal(s)
+        else:
+            for url in urls:
+                _add_url(url, name)
+
+    # Standalone warehouse evidence (from context, not a signal)
+    if warehouse_fill is not None and "ev_warehouse_fill" not in seen:
+        direction = "bullish" if (100 - warehouse_fill) >= 50 else "bearish"
+        fill_pct = warehouse_fill
+        rationale = (
+            f"Current warehouse fill is {fill_pct:.0f}%. "
+            f"{'Low inventory creates supply risk and increases buying urgency.' if direction == 'bullish' else 'High inventory reduces near-term urgency and provides buffer.'}"
+        )
+        eid = "ev_warehouse_fill"
+        ev_list.append(Evidence(
+            id=eid,
+            source="Internal computation",
+            title="Warehouse fill level",
+            date=today,
+            reliability="medium",
+            url="",
+            evidence_origin="warehouse",
+            evidence_rationale=rationale,
+            signal_extracted=rationale,
+            used_for=[],
+        ))
+        seen.add("ev_warehouse_fill")
+        url_to_id["ev_warehouse_fill"] = eid
 
     for url in extra_urls:
-        _add(url, None, signal_source="cala")
+        _add_url(url, None)
 
     return ev_list, url_to_id
 
@@ -224,9 +376,12 @@ def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str]) -> 
         conf = float(s.get("confidence") or 0.0)
         sign = 1.0 if direction == "bullish" else (-1.0 if direction == "bearish" else 0.0)
         impact_score = round(sign * (score / 100.0) * (conf / 100.0), 3)
-        # Internal signals carry no external citations
         is_internal = (s.get("source") or "").lower() == "internal"
-        ev_ids = [] if is_internal else [url_to_id[u] for u in (s.get("evidence") or []) if u in url_to_id]
+        if is_internal:
+            internal_key = f"ev_{name}"
+            ev_ids = [internal_key] if internal_key in url_to_id else []
+        else:
+            ev_ids = [url_to_id[u] for u in (s.get("evidence") or []) if u in url_to_id]
         drivers.append(Driver(
             id=_drv_id(name),
             label=SIGNAL_LABELS.get(name, name.replace("_", " ").capitalize()),
@@ -257,7 +412,7 @@ def _build_inventory_driver(warehouse_fill: float | None, url_to_id: dict[str, s
         impact_score=impact_score,
         confidence=0.8,
         explanation=f"Current warehouse fill is {warehouse_fill:.0f}%. Lower fill increases urgency; higher fill reduces it.",
-        evidence_ids=[],
+        evidence_ids=["ev_warehouse_fill"] if "ev_warehouse_fill" in url_to_id else [],
     )
 
 
@@ -380,7 +535,12 @@ def _link_evidence_back(evidence: list[Evidence], drivers: list[Driver], paths: 
 
 
 def _build_reasoning(drivers: list[Driver], action: str, material: str) -> list[ReasoningStep]:
-    strong = sorted(drivers, key=lambda d: abs(d.impact_score), reverse=True)[:2]
+    # Always include top Cala-evidenced driver + top internal driver (max 3 total)
+    cala_drivers = [d for d in drivers if d.evidence_ids]
+    internal_drivers = [d for d in drivers if not d.evidence_ids]
+    top_cala = sorted(cala_drivers, key=lambda d: abs(d.impact_score), reverse=True)[:2]
+    top_internal = sorted(internal_drivers, key=lambda d: abs(d.impact_score), reverse=True)[:1]
+    strong = sorted(top_cala + top_internal, key=lambda d: abs(d.impact_score), reverse=True)[:3]
     steps: list[ReasoningStep] = []
     step = 1
     for d in strong:
@@ -497,12 +657,13 @@ def build_analyze_response(
     gen_at = requested_at or datetime.now(timezone.utc)
 
     spot_url = _spot_url_for(material) if context_flags.get("spot_price", True) else None
-    evidence, url_to_id = _build_evidence(signals, evidence_urls, spot_url, today)
+    warehouse_fill_raw = decision.get("warehouse_fill_pct")
+    if not isinstance(warehouse_fill_raw, (int, float)):
+        warehouse_fill_raw = context_flags.get("warehouse_fill_pct") if isinstance(context_flags.get("warehouse_fill_pct"), (int, float)) else None
+    evidence, url_to_id = _build_evidence(signals, evidence_urls, spot_url, today, warehouse_fill=warehouse_fill_raw)
 
     drivers = _build_drivers(signals, url_to_id)
-    warehouse_fill = decision.get("warehouse_fill_pct") if context_flags.get("warehouse_fill_pct") is not False else None
-    if warehouse_fill is None:
-        warehouse_fill = (context_flags.get("warehouse_fill_pct") if isinstance(context_flags.get("warehouse_fill_pct"), (int, float)) else None)
+    warehouse_fill = warehouse_fill_raw
     inv_driver = _build_inventory_driver(warehouse_fill if isinstance(warehouse_fill, (int, float)) else None, url_to_id)
     if inv_driver:
         drivers.append(inv_driver)
@@ -589,6 +750,8 @@ def build_analyze_response(
         interpretation=(
             "Forecast corridor asymmetric: upside tail wider than downside."
             if abs(float(summary_forecast.get("range_high_pct") or 0.0)) > abs(float(summary_forecast.get("range_low_pct") or 0.0))
+            else "Forecast corridor asymmetric: downside tail wider than upside."
+            if abs(float(summary_forecast.get("range_low_pct") or 0.0)) > abs(float(summary_forecast.get("range_high_pct") or 0.0)) * 1.2
             else "Forecast corridor roughly symmetric around base path."
         ),
     )

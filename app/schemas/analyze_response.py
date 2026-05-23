@@ -117,13 +117,18 @@ class PricePath(BaseModel):
     explainability: Explainability
 
 
+EvidenceOrigin = Literal["url", "momentum", "seasonality", "warehouse", "internal"]
+
+
 class Evidence(BaseModel):
     id: str
     source: str
     title: str
     date: _date | None = None
     reliability: Reliability
-    url: str
+    url: str = ""
+    evidence_rationale: str = ""
+    evidence_origin: EvidenceOrigin = "url"
     signal_extracted: str
     used_for: list[str] = Field(default_factory=list)
 

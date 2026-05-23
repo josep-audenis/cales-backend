@@ -6,8 +6,10 @@ from pydantic import BaseModel, Field
 
 from app.agent.analyze_builder import build_analyze_response
 from app.agent.runtime import run_agent
+from app.agent.ui_agent import run_ui_agent
 from app.schemas.analyze_response import AnalyzeResponse
 from app.schemas.common import MaterialKey, PriorityProfileKey
+from app.schemas.ui_agent import UIAgentRequest, UIAgentResponse
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -85,3 +87,8 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         tool_calls=result.tool_calls,
         answer_text=result.answer,
     )
+
+
+@router.post("/ui", response_model=UIAgentResponse)
+async def ui(req: UIAgentRequest) -> UIAgentResponse:
+    return await run_ui_agent(req)

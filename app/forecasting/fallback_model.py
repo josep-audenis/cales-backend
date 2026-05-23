@@ -54,29 +54,42 @@ def build_forecast(
     else:
         daily_vol = 0.01
 
-    # MA trend from last 20 days
+    # MA trend from last 20 days — use median daily log-return, cap at ±0.10% per day
     trend_window = prices[-20:] if len(prices) >= 20 else prices
-    daily_drift = (trend_window[-1] / trend_window[0]) ** (1 / max(len(trend_window) - 1, 1)) - 1
+    raw_drift = (trend_window[-1] / trend_window[0]) ** (1 / max(len(trend_window) - 1, 1)) - 1
+    daily_drift = max(-0.0005, min(0.0005, raw_drift))  # cap: ±0.05%/day = ±4.5% over 90d
 
     net_pressure = _net_signal_pressure(signals)
-    signal_adjustment = net_pressure * 0.05  # cap signal nudge at ±5%
+    # Signal nudge: ±1% total over horizon
+    signal_adjustment = net_pressure * 0.01
 
     last_date, last_price = history[-1]
     forecast_points: list[ForecastPoint] = []
 
+    # Hard cap: total swing from spot ≤ 18% at any horizon
+    max_total_swing = 0.18
+    # Vol cone: band relative to last_price (not median) → monotone bands
+    max_band_pct = 0.15
+
     for step in range(1, horizon_days + 1):
         fc_date = last_date + timedelta(days=step)
-        horizon_vol = daily_vol * math.sqrt(step)
+        horizon_vol = min(daily_vol * math.sqrt(step), max_band_pct / 1.96)
 
         median = last_price * (1 + daily_drift) ** step * (1 + signal_adjustment)
 
-        risk_mult = 1.0 + abs(net_pressure) * 0.5
+        risk_mult = 1.0 + abs(net_pressure) * 0.25
         if net_pressure > 0:
-            upper = median * (1 + 1.96 * horizon_vol * 1.4 * risk_mult)
-            lower = median * (1 - 1.96 * horizon_vol * 0.8)
+            upper = last_price * (1 + 1.96 * horizon_vol * 1.2 * risk_mult)
+            lower = last_price * (1 - 1.96 * horizon_vol * 0.8)
         else:
-            upper = median * (1 + 1.96 * horizon_vol * 0.8)
-            lower = median * (1 - 1.96 * horizon_vol * 1.4 * risk_mult)
+            upper = last_price * (1 + 1.96 * horizon_vol * 0.8)
+            lower = last_price * (1 - 1.96 * horizon_vol * 1.2 * risk_mult)
+
+        # Hard cap total swing from spot
+        upper = min(upper, last_price * (1 + max_total_swing))
+        lower = max(lower, last_price * (1 - max_total_swing))
+        # Ensure median stays within band
+        median = max(lower, min(upper, median))
 
         forecast_points.append(ForecastPoint(
             date=fc_date,
@@ -100,7 +113,7 @@ def build_forecast(
         direction = ForecastDirection.FLAT
 
     avg_band_pct = (range_high_pct - range_low_pct) / 2 / 100
-    uncertainty = round(min(avg_band_pct / 0.30, 1.0), 3)  # normalise: 30% band = 1.0
+    uncertainty = round(min(avg_band_pct / 0.20, 1.0), 3)  # normalise: 20% band = max uncertainty
 
     summary = ForecastSummary(
         expected_change_pct=expected_change_pct,
