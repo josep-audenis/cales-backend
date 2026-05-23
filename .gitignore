@@ -48,3 +48,5 @@ pytest*.log
 
 scripts/
 scratch/
+.before_deploy*
+.timesfm
