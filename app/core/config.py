@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     agent_model: str = "llama-3.1-8b-instant"
 
+    # Cala MCP (https://docs.cala.ai/integrations/mcp)
+    cala_mcp_url: str = "https://api.cala.ai/mcp/"
+    cala_mcp_api_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

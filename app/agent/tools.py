@@ -1,40 +1,49 @@
 """
 Tool registry for the procurement analyst agent.
 
-Tools wrap existing deterministic services. Each tool returns JSON-serializable
-dicts. Decorated with @function_tool from the OpenAI Agents SDK so the agent
-can call them.
+Tools wrap deterministic services. Cala market intelligence is NOT wrapped
+here — it is exposed natively via the Cala MCP server (see app/agent/runtime).
+The agent calls knowledge_search / knowledge_query / entity_search directly.
 
-If `openai-agents` is not installed yet, the @function_tool decorator is
-replaced with a no-op so this module still imports (callers can use the raw
-functions directly).
+The recommender chain is decomposed into small steps the agent can orchestrate:
+  get_price_history -> compute_price_features -> compute_momentum_signal
+                    -> build_forecast_summary -> score_and_decide
+                    -> generate_explanation
+A single-call shortcut `fallback_full_analysis` runs the whole chain.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.clients.cala_client import CalaClient
-from app.data.ingestion import get_cala_signals, get_price_history
+from app.data.ingestion import get_price_history
+from app.decision.explanation import build_drivers, build_explanation
 from app.decision.recommender import get_recommendation
+from app.decision.scoring import decide_action
+from app.features.material_profiles import get_profile
+from app.features.priority_profiles import get_priority_profile
+from app.forecasting.fallback_model import build_forecast
 from app.schemas.common import MaterialKey, PriorityProfileKey
 from app.schemas.recommendation import RecommendationRequest
+from app.schemas.signal import Signal
+from app.signals.price_momentum_signal import get_price_momentum_signal
+from app.signals.seasonality_signal import get_seasonality_signal
 
-try:  # OpenAI Agents SDK
+try:
     from agents import function_tool  # type: ignore
-except Exception:  # pragma: no cover - SDK optional at scaffold time
+except Exception:  # pragma: no cover
 
     def function_tool(fn):  # type: ignore
         return fn
 
 
 # ---------------------------------------------------------------------------
-# A. Data ingestion
+# A. Data
 # ---------------------------------------------------------------------------
 
 
 @function_tool
-def get_available_materials() -> dict[str, Any]:
+def get_available_materials(noop: str = "") -> dict[str, Any]:
     return {"materials": [m.value for m in MaterialKey]}
 
 
@@ -48,66 +57,118 @@ def get_price_history_tool(material: str, lookback_days: int = 365) -> dict[str,
     }
 
 
-@function_tool
-def get_cala_market_signals(material: str, horizon_days: int = 180) -> dict[str, Any]:
-    signals = get_cala_signals(material)
-    return {
-        "signals": [
-            {
-                "name": s.name,
-                "direction": s.direction.value,
-                "score": s.score,
-                "confidence": s.confidence,
-                "horizon_days": s.horizon_days,
-                "source": s.source,
-                "evidence": s.evidence,
-            }
-            for s in signals
-        ]
-    }
+# ---------------------------------------------------------------------------
+# B. Price-derived signals
+# ---------------------------------------------------------------------------
 
 
 @function_tool
-def get_source_registry(material: str) -> dict[str, Any]:
+def compute_price_features(material: str, lookback_days: int = 365) -> dict[str, Any]:
+    history = get_price_history(material, lookback_days=lookback_days)
+    prices = [p.price for p in history]
+    if len(prices) < 2:
+        return {"material": material, "error": "insufficient history"}
     return {
         "material": material,
-        "sources": [
-            {
-                "name": "Cala.ai",
-                "type": "structured_market_intelligence",
-                "freshness": "daily",
-                "reliability": 0.85,
-                "used_for": ["prices", "geopolitical_signals", "supply_risk"],
-            },
-            {
-                "name": "Internal price history",
-                "type": "historical_dataset",
-                "freshness": "weekly",
-                "reliability": 0.95,
-                "used_for": ["volatility", "analogues", "momentum"],
-            },
-        ],
+        "current_price": prices[-1],
+        "return_1m": (prices[-1] / prices[-21] - 1) if len(prices) > 21 else None,
+        "return_3m": (prices[-1] / prices[-63] - 1) if len(prices) > 63 else None,
+        "return_6m": (prices[-1] / prices[-126] - 1) if len(prices) > 126 else None,
+        "ma_20": sum(prices[-20:]) / min(20, len(prices)),
+        "ma_60": sum(prices[-60:]) / min(60, len(prices)),
+        "high_1y": max(prices[-252:]) if len(prices) >= 252 else max(prices),
+        "low_1y": min(prices[-252:]) if len(prices) >= 252 else min(prices),
     }
 
 
-# ---------------------------------------------------------------------------
-# G. Decision (delegates to existing deterministic recommender)
-# ---------------------------------------------------------------------------
+@function_tool
+def compute_momentum_signal(material: str) -> dict[str, Any]:
+    history = get_price_history(material, lookback_days=365)
+    sig = get_price_momentum_signal([p.price for p in history])
+    return sig.model_dump(mode="json")
 
 
 @function_tool
-def compute_recommendation(
+def compute_seasonality_signal_tool(material: str) -> dict[str, Any]:
+    return get_seasonality_signal(material).model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# C. Forecast
+# ---------------------------------------------------------------------------
+
+
+def _signals_from_payload(raw: list[dict[str, Any]]) -> list[Signal]:
+    return [Signal(**s) for s in raw]
+
+
+@function_tool(strict_mode=False)
+def build_forecast_summary(
+    material: str,
+    horizon_days: int = 180,
+    extra_signals: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Volatility-cone forecast. `extra_signals` lets the agent inject Cala-derived signals."""
+    history = get_price_history(material, lookback_days=365)
+    history_tuples = [(p.date, p.price) for p in history]
+    momentum = get_price_momentum_signal([p.price for p in history])
+    seasonality = get_seasonality_signal(material)
+    signals = [momentum, seasonality]
+    if extra_signals:
+        signals.extend(_signals_from_payload(extra_signals))
+    _, summary = build_forecast(history_tuples, horizon_days, signals)
+    return summary.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# D. Decision
+# ---------------------------------------------------------------------------
+
+
+@function_tool(strict_mode=False)
+def score_and_decide(
     material: str,
     priority_profile: str = "balanced",
     horizon_days: int = 180,
+    extra_signals: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Score signals + forecast and pick BUY_NOW / WAIT / HEDGE / MONITOR."""
+    mat_profile = get_profile(MaterialKey(material))
+    priority = get_priority_profile(PriorityProfileKey(priority_profile))
+    history = get_price_history(material, lookback_days=365)
+    history_tuples = [(p.date, p.price) for p in history]
+    momentum = get_price_momentum_signal([p.price for p in history])
+    seasonality = get_seasonality_signal(material)
+    signals = [momentum, seasonality]
+    if extra_signals:
+        signals.extend(_signals_from_payload(extra_signals))
+    _, summary = build_forecast(history_tuples, horizon_days, signals)
+    action, scores = decide_action(summary, signals, mat_profile, priority)
+    return {
+        "material": material,
+        "action": action.value,
+        "horizon_days": horizon_days,
+        "scores": scores,
+        "forecast_summary": summary.model_dump(mode="json"),
+        "drivers": [d.model_dump(mode="json") for d in build_drivers(signals)],
+        "explanation": build_explanation(action, summary, horizon_days, scores["confidence"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# E. One-shot fallback (demo safety net)
+# ---------------------------------------------------------------------------
+
+
+def _run_recommendation(
+    material: str, priority_profile: str = "balanced", horizon_days: int = 180
 ) -> dict[str, Any]:
     req = RecommendationRequest(
         material=MaterialKey(material),
         priority_profile=PriorityProfileKey(priority_profile),
         horizon_days=horizon_days,
     )
-    rec = get_recommendation(req)
-    return rec.model_dump(mode="json")
+    return get_recommendation(req).model_dump(mode="json")
 
 
 @function_tool
@@ -115,12 +176,12 @@ def fallback_full_analysis(
     material: str,
     priority_profile: str = "balanced",
 ) -> dict[str, Any]:
-    """Demo-safety net. Runs deterministic chain end-to-end without LLM planning."""
-    return compute_recommendation(material, priority_profile, 180)
+    """One-shot deterministic recommendation. Use only if smaller tools fail."""
+    return _run_recommendation(material, priority_profile, 180)
 
 
 # ---------------------------------------------------------------------------
-# J. Agent control
+# F. Agent control
 # ---------------------------------------------------------------------------
 
 
@@ -151,55 +212,35 @@ def validate_priority_profile(profile: str) -> dict[str, Any]:
 
 
 @function_tool
-def list_capabilities() -> dict[str, Any]:
+def list_capabilities(noop: str = "") -> dict[str, Any]:
     return {
         "capabilities": [
             "Recommend BUY_NOW / WAIT / HEDGE / MONITOR for raw materials",
             "Explain drivers and counter-drivers with evidence sources",
-            "Compare materials by risk and opportunity",
-            "Run what-if scenarios (geopolitical / weather / oil / FX shocks)",
-            "Generate forecast risk cones with Cala.ai adjustments",
-            "Produce an audit trail of every tool call",
+            "Run what-if scenarios and compare materials",
+            "Pull live market intelligence from Cala via MCP",
         ],
         "materials": [m.value for m in MaterialKey],
         "priority_profiles": [p.value for p in PriorityProfileKey],
+        "cala_mcp_tools": [
+            "knowledge_search",
+            "knowledge_query",
+            "entity_search",
+            "entity_introspection",
+            "retrieve_entity",
+        ],
     }
 
 
 # ---------------------------------------------------------------------------
-# Tool registry — exported list for SDK Agent construction
+# Registry
 # ---------------------------------------------------------------------------
 
 ALL_TOOLS = [
-    get_available_materials,
     get_price_history_tool,
-    get_cala_market_signals,
-    get_source_registry,
-    compute_recommendation,
+    build_forecast_summary,
+    score_and_decide,
     fallback_full_analysis,
-    validate_material,
-    validate_priority_profile,
-    list_capabilities,
 ]
 
-
-# Convenience for non-SDK callers / tests
-def call_raw(tool_name: str, **kwargs: Any) -> Any:
-    """Invoke a tool by name, bypassing the SDK wrapper."""
-    registry = {
-        "get_available_materials": get_available_materials,
-        "get_price_history": get_price_history_tool,
-        "get_cala_market_signals": get_cala_market_signals,
-        "get_source_registry": get_source_registry,
-        "compute_recommendation": compute_recommendation,
-        "fallback_full_analysis": fallback_full_analysis,
-        "validate_material": validate_material,
-        "validate_priority_profile": validate_priority_profile,
-        "list_capabilities": list_capabilities,
-    }
-    fn = registry[tool_name]
-    inner = getattr(fn, "__wrapped__", fn)
-    return inner(**kwargs)
-
-
-__all__ = ["ALL_TOOLS", "call_raw", "CalaClient"]
+__all__ = ["ALL_TOOLS", "_run_recommendation"]

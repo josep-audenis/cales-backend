@@ -25,7 +25,8 @@ LLM must not think quantitatively. Every number comes from a tool call. See [[ag
 ## Stack
 
 - **Framework:** OpenAI Agents SDK (provider-agnostic; gives agents, tools, handoffs, guardrails, structured outputs, tracing).
-- **LLM primary:** Groq free tier (Llama/Qwen, OpenAI-compatible).
+- **External knowledge:** Cala MCP (`https://api.cala.ai/mcp/`, `X-API-KEY`). Tools attached natively: `knowledge_search`, `knowledge_query`, `entity_search`, `entity_introspection`, `retrieve_entity`. Uses `strict_mode=False` on our own tools that pass through Cala-shaped signals.
+- **LLM primary:** Groq free tier (`llama-3.1-8b-instant` default, OpenAI-compatible).
 - **LLM fallback:** Gemini Flash → Ollama local.
 - **Demo fallback:** `fallback_full_analysis` deterministic pipeline button — works without any LLM.
 

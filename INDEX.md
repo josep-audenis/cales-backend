@@ -27,6 +27,8 @@ Catalog of wiki pages. Updated on every ingest.
 - [Decision Engine](wiki/concepts/decision-engine.md) — scoring → action mapping + explanation.
 - [Agent Tools](wiki/concepts/agent-tools.md) — full tool catalog w/ signatures + I/O contracts.
 - [Agent Guardrails](wiki/concepts/agent-guardrails.md) — quant/source/recommendation/confidence/fallback rules.
+- [Local Price Loader](wiki/concepts/local-price-loader.md) — local CSV/parquet loader; replaces broken Cala price path.
+- [Cala Signal Extraction](wiki/concepts/cala-signal-extraction.md) — 5-signal pipeline mining Cala graph: producers / disruption / weather / policy / explanation. UUID cache + proven queries.
 
 ## Syntheses
 
