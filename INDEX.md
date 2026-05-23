@@ -25,8 +25,11 @@ Catalog of wiki pages. Updated on every ingest.
 - [Material Profile](wiki/concepts/material-profile.md) — per-material signal weights + hedgeability + criticality.
 - [Priority Profile](wiki/concepts/priority-profile.md) — user strategy modes (cost / risk_averse / supply).
 - [Decision Engine](wiki/concepts/decision-engine.md) — scoring → action mapping + explanation.
+- [Agent Tools](wiki/concepts/agent-tools.md) — full tool catalog w/ signatures + I/O contracts.
+- [Agent Guardrails](wiki/concepts/agent-guardrails.md) — quant/source/recommendation/confidence/fallback rules.
 
 ## Syntheses
 
-- [Architecture v2](wiki/syntheses/architecture-v2.md) — consolidated build target: layers, API, folder structure, frontend screens.
+- [Agent Architecture](wiki/syntheses/agent-architecture.md) — **current top-level**: tool-first agent (OpenAI Agents SDK + Groq).
+- [Architecture v2](wiki/syntheses/architecture-v2.md) — layers/API/folders (now the tool layer under the agent).
 - [MVP Build Order](wiki/syntheses/mvp-build-order.md) — phased roadmap: end-to-end flow first.

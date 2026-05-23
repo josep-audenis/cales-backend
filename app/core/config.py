@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     cala_api_key: str = ""
     use_cala_mock: bool = True
 
+    # Agent LLM (Groq via OpenAI-compatible API)
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    agent_model: str = "llama-3.3-70b-versatile"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

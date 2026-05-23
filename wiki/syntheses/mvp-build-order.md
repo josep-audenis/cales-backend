@@ -8,7 +8,16 @@ tags: [mvp, roadmap]
 
 # MVP Build Order
 
+> **Revised 2026-05-23** for [[agent-architecture]] pivot. Deterministic engine still ships first — it becomes the tool layer the agent calls. Agent wraps after Phase 1.
+
 End-to-end flow first. No model zoo. Brief explicit: "Prioritize a working end-to-end flow over a broad but superficial solution."
+
+## Phase 0 — Agent scaffold (parallelizable)
+
+- Wire OpenAI Agents SDK + Groq (`app/agent/runtime.py`).
+- Stub tool registry returning sample JSON (`app/agent/tools.py`).
+- `/agent/chat` + `/agent/analyze` endpoints reachable end-to-end before real services land.
+- Demo-safety: `fallback_full_analysis` button hits deterministic chain bypassing LLM.
 
 ## Phase 1 — MVP (full decision loop)
 

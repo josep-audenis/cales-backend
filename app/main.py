@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import forecasts, health, materials, recommendations, signals
+from app.api.routes import agent, forecasts, health, materials, recommendations, signals
 from app.core.config import settings
 
 
@@ -11,6 +11,7 @@ def create_app() -> FastAPI:
     app.include_router(forecasts.router)
     app.include_router(signals.router)
     app.include_router(recommendations.router)
+    app.include_router(agent.router)
     return app
 
 

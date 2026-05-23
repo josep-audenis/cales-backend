@@ -8,6 +8,8 @@ tags: [architecture, plan, api]
 
 # Architecture v2 — Consolidated Plan
 
+> **Superseded execution model 2026-05-23 → [[agent-architecture]].** Layers + API + folder structure below remain valid; they become the **tool layer** under the agent. Read [[agent-architecture]] for the new top-level shape.
+
 Working synthesis of [[smartbuy-brief]] requirements + [[planning-architecture-v2]] design. This is the build target.
 
 ## Product positioning
