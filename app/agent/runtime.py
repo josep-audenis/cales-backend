@@ -45,6 +45,13 @@ class AgentRunResult:
 
 
 def _make_model() -> Any:
+    if settings.llm_provider == "hf":
+        # HF Space TGI: OpenAI-compatible, served at <base>/v1/chat/completions.
+        # Uses a wrapper that fixes TGI's non-spec tool-call arguments (dict -> JSON string).
+        from app.clients.hf_tgi_client import make_tgi_async_openai
+
+        client = make_tgi_async_openai(api_key=settings.hf_token, base_url=settings.hf_space_base_url)
+        return OpenAIChatCompletionsModel(model=settings.hf_model, openai_client=client)
     client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_base_url)
     return OpenAIChatCompletionsModel(model=settings.agent_model, openai_client=client)
 
@@ -78,14 +85,21 @@ def _extract_tool_calls(result: Any) -> list[dict[str, Any]]:
 
 
 async def run_agent(message: str, context: dict[str, Any] | None = None) -> AgentRunResult:
-    """Run one agent turn. Returns answer + tool-call audit trail."""
+    """Run one agent turn. Delegates to the multi-agent orchestrator by default."""
     ctx = context or {}
     log.info("run_agent start | msg=%r ctx=%s", message[:120], ctx)
 
-    if not _SDK_AVAILABLE or not settings.groq_api_key:
+    have_llm_key = (
+        bool(settings.hf_token) if settings.llm_provider == "hf" else bool(settings.groq_api_key)
+    )
+    if not _SDK_AVAILABLE or not have_llm_key:
         material = ctx.get("material", "barley")
         priority = ctx.get("priority_profile", "balanced")
-        log.warning("SDK unavailable or GROQ_API_KEY empty — deterministic fallback for %s", material)
+        log.warning(
+            "SDK unavailable or LLM key empty (provider=%s) — deterministic fallback for %s",
+            settings.llm_provider,
+            material,
+        )
         rec = _run_recommendation(
             material=material,
             priority_profile=priority,
@@ -96,6 +110,27 @@ async def run_agent(message: str, context: dict[str, Any] | None = None) -> Agen
             tool_calls=[{"tool": "compute_recommendation", "args": {"material": material}}],
             raw=rec,
         )
+
+    # Default path: multi-agent orchestrator.
+    use_legacy = bool(ctx.get("legacy_single_agent"))
+    if not use_legacy:
+        try:
+            from app.agent.orchestrator import run_orchestrator
+
+            orch = await run_orchestrator(message, ctx)
+            return AgentRunResult(
+                answer=orch.answer,
+                tool_calls=orch.tool_calls,
+                raw={
+                    "decision": orch.decision,
+                    "signals": orch.signals,
+                    "evidence_urls": orch.evidence_urls,
+                    "timings": orch.timings,
+                    "subagent_outputs": orch.raw,
+                },
+            )
+        except Exception:
+            log.exception("Orchestrator failed — falling back to single-agent path")
 
     t0 = time.perf_counter()
     mcp_servers: list[Any] = []
@@ -130,7 +165,14 @@ async def run_agent(message: str, context: dict[str, Any] | None = None) -> Agen
 
 async def _run_with(message: str, ctx: dict[str, Any], mcp_servers: list[Any]) -> AgentRunResult:
     agent = _make_agent(mcp_servers)
-    log.info("Runner.run start | model=%s tools=%d mcp_servers=%d", settings.agent_model, len(ALL_TOOLS), len(mcp_servers))
+    active_model = settings.hf_model if settings.llm_provider == "hf" else settings.agent_model
+    log.info(
+        "Runner.run start | provider=%s model=%s tools=%d mcp_servers=%d",
+        settings.llm_provider,
+        active_model,
+        len(ALL_TOOLS),
+        len(mcp_servers),
+    )
     t0 = time.perf_counter()
     try:
         result = await Runner.run(agent, input=message, context=ctx)

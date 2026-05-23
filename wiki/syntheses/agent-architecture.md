@@ -12,6 +12,8 @@ Pivot from pure deterministic pipeline ([[architecture-v2]]) to **agent + tools*
 
 Supersedes execution model in [[architecture-v2]]; underlying layers (Data / Forecast / Signals / Decision) unchanged.
 
+> **Superseded execution shell (2026-05-23):** single Procurement Analyst agent has been replaced by a 5-agent crew under an Orchestrator. See [[multi-agent-orchestration]] for the new flow. This page remains accurate for the tool layer + guardrails; the LLM-driving section below describes the legacy single-agent shell.
+
 ## Core principle
 
 ```

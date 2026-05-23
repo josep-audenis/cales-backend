@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     agent_model: str = "llama-3.1-8b-instant"
 
+    # HF Space TGI (OpenAI-compatible). Set llm_provider="hf" to use this.
+    # Auth: hf_token is the HF user token (read scope is enough for private Space).
+    llm_provider: str = "groq"  # "groq" | "hf"
+    hf_space_base_url: str = "https://ehubbarcelona-cales.hf.space/v1"
+    hf_token: str = ""
+    hf_model: str = "Qwen/Qwen2.5-32B-Instruct"
+
     # Cala MCP (https://docs.cala.ai/integrations/mcp)
     cala_mcp_url: str = "https://api.cala.ai/mcp/"
     cala_mcp_api_key: str = ""

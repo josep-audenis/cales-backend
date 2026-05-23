@@ -1,7 +1,22 @@
+import logging
+
 from fastapi import FastAPI
 
 from app.api.routes import agent, forecasts, health, materials, recommendations, signals, prices
 from app.core.config import settings
+
+
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+    )
+    # Ensure our namespaces are always INFO regardless of root level.
+    for name in ("app", "app.agent", "app.agent.orchestrator", "app.agent.tools", "app.clients.hf_tgi"):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
+_configure_logging()
 
 
 def create_app() -> FastAPI:

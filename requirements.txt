@@ -8,3 +8,4 @@ openai>=1.50
 openai-agents>=0.0.10
 pandas>=2.2
 numpy>=1.26
+yfinance

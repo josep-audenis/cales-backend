@@ -32,6 +32,7 @@ Catalog of wiki pages. Updated on every ingest.
 
 ## Syntheses
 
-- [Agent Architecture](wiki/syntheses/agent-architecture.md) — **current top-level**: tool-first agent (OpenAI Agents SDK + Groq).
+- [Multi-Agent Orchestration](wiki/syntheses/multi-agent-orchestration.md) — **current top-level**: 5-agent crew (Fundamentals/CalaSignal/Forecast/Decision/Explanation) under code Orchestrator w/ asyncio.gather.
+- [Agent Architecture](wiki/syntheses/agent-architecture.md) — tool layer + guardrails (single-agent shell superseded).
 - [Architecture v2](wiki/syntheses/architecture-v2.md) — layers/API/folders (now the tool layer under the agent).
 - [MVP Build Order](wiki/syntheses/mvp-build-order.md) — phased roadmap: end-to-end flow first.
