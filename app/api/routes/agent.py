@@ -11,6 +11,7 @@ from app.agent.ui_agent import run_ui_agent
 from app.agent.website_report_adapter import make_request_id, to_website_report
 from app.core.config import settings
 from app.reports import render_executive_pdf
+from app.reports.storage import load_pdf, load_report, save_report_bundle
 from app.schemas.analyze_response import AnalyzeResponse
 from app.schemas.common import MaterialKey, PriorityProfileKey
 from app.schemas.ui_agent import UIAgentRequest, UIAgentResponse
@@ -106,18 +107,33 @@ async def analyze(req: AnalyzeRequest) -> WebsiteReportResponse:
     _PDF_CACHE[request_id] = (pdf_bytes, file_name)
     base = settings.public_base_url.rstrip("/")
     pdf_url = f"{base}/reports/{request_id}/executive.pdf" if base else f"/reports/{request_id}/executive.pdf"
-    return to_website_report(
+    report = to_website_report(
         resp=resp,
         request_id=request_id,
         pdf_file_name=file_name,
         pdf_url=pdf_url,
         pdf_size_bytes=len(pdf_bytes),
     )
+    save_report_bundle(report, pdf_bytes)
+    return report
+
+
+@router.get("/reports/{request_id}", response_model=WebsiteReportResponse)
+async def get_report(request_id: str) -> WebsiteReportResponse:
+    report = load_report(request_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return report
 
 
 @reports_router.get("/{request_id}/executive.pdf")
 async def get_executive_pdf(request_id: str, inline: bool = True) -> Response:
     cached = _PDF_CACHE.get(request_id)
+    if cached is None:
+        pdf_bytes = load_pdf(request_id)
+        report = load_report(request_id)
+        if pdf_bytes is not None and report is not None:
+            cached = (pdf_bytes, report.executive_pdf.file_name)
     if cached is None:
         raise HTTPException(status_code=404, detail="report not found")
     pdf_bytes, file_name = cached

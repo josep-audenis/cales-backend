@@ -1,8 +1,9 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, forecasts, health, materials, recommendations, signals, prices
+from app.api.routes import agent, compat, forecasts, health, materials, recommendations, signals, prices
 from app.core.config import settings
 from app.db.session import create_tables
 
@@ -25,8 +26,17 @@ _configure_logging()
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug)
+    origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins or ["*"],
+        allow_credentials="*" not in origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # app.add_event_handler("startup", create_tables)
     app.include_router(health.router)
+    app.include_router(compat.router)
     app.include_router(materials.router)
     app.include_router(forecasts.router)
     app.include_router(signals.router)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from app.schemas.analyze_response import AnalyzeResponse
 from app.schemas.website_report import (
     ExecutivePdf,
@@ -15,7 +17,8 @@ from app.schemas.website_report import (
 
 
 def make_request_id(material: str, generated_at, horizon_days: int) -> str:
-    return f"{material}-{generated_at.date().isoformat()}-{horizon_days}d"
+    stamp = generated_at.strftime("%Y%m%d-%H%M%S")
+    return f"{material}-{stamp}-{horizon_days}d-{uuid4().hex[:8]}"
 
 
 def to_website_report(

@@ -86,10 +86,22 @@ def _sanitize(resp: UIAgentResponse, req: UIAgentRequest) -> UIAgentResponse:
         if a.type == "toggle_off" and ctl.selected is False:
             continue
         cleaned.append(a)
+    prompt = req.prompt.lower()
+    generate_ctl = valid_ids.get("generate_report")
+    wants_generation = "generate" in prompt and "report" in prompt
+    already_clicks_generate = any(a.type == "click" and a.target_id == "generate_report" for a in cleaned)
+    if wants_generation and generate_ctl is not None and not generate_ctl.disabled and not already_clicks_generate:
+        cleaned.append(
+            UIAction(
+                type="click",
+                target_id="generate_report",
+                reason="Generate the report after applying the requested input changes.",
+            )
+        )
     return UIAgentResponse(
         explanation=resp.explanation,
         actions=cleaned,
-        requires_confirmation=resp.requires_confirmation,
+        requires_confirmation=resp.requires_confirmation or bool(cleaned),
     )
 
 
