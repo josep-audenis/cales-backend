@@ -1,19 +1,26 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.agent.analyze_builder import build_analyze_response
 from app.agent.runtime import run_agent
 from app.agent.ui_agent import run_ui_agent
+from app.agent.website_report_adapter import make_request_id, to_website_report
+from app.core.config import settings
 from app.reports import render_executive_pdf
 from app.schemas.analyze_response import AnalyzeResponse
 from app.schemas.common import MaterialKey, PriorityProfileKey
 from app.schemas.ui_agent import UIAgentRequest, UIAgentResponse
+from app.schemas.website_report import WebsiteReportResponse
+
+# Process-local cache of generated PDFs keyed by request_id.
+_PDF_CACHE: dict[str, tuple[bytes, str]] = {}
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+reports_router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 class ChatContext(BaseModel):
@@ -90,8 +97,40 @@ async def _run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     )
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+@router.post("/analyze", response_model=WebsiteReportResponse)
+async def analyze(req: AnalyzeRequest) -> WebsiteReportResponse:
+    resp = await _run_analyze(req)
+    request_id = make_request_id(req.material.value, resp.generated_at, req.horizon_days)
+    pdf_bytes = render_executive_pdf(resp)
+    file_name = f"{req.material.value}-executive-report-{resp.generated_at.strftime('%Y-%m-%d')}.pdf"
+    _PDF_CACHE[request_id] = (pdf_bytes, file_name)
+    base = settings.public_base_url.rstrip("/")
+    pdf_url = f"{base}/reports/{request_id}/executive.pdf" if base else f"/reports/{request_id}/executive.pdf"
+    return to_website_report(
+        resp=resp,
+        request_id=request_id,
+        pdf_file_name=file_name,
+        pdf_url=pdf_url,
+        pdf_size_bytes=len(pdf_bytes),
+    )
+
+
+@reports_router.get("/{request_id}/executive.pdf")
+async def get_executive_pdf(request_id: str, inline: bool = True) -> Response:
+    cached = _PDF_CACHE.get(request_id)
+    if cached is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    pdf_bytes, file_name = cached
+    disp = "inline" if inline else "attachment"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{file_name}"'},
+    )
+
+
+@router.post("/analyze/raw", response_model=AnalyzeResponse)
+async def analyze_raw(req: AnalyzeRequest) -> AnalyzeResponse:
     return await _run_analyze(req)
 
 

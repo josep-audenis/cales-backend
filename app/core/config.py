@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./cales.db"
 
+    # Public base URL for absolute links in responses (e.g. PDF download URL).
+    public_base_url: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

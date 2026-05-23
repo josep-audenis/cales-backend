@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(signals.router)
     app.include_router(recommendations.router)
     app.include_router(agent.router)
+    app.include_router(agent.reports_router)
     app.include_router(prices.router)
     return app
 
