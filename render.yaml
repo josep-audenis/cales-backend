@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: cales-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Comma-separated frontend origins (e.g. https://cales-frontend.vercel.app), or * for demo mode.
+      - key: CORS_ORIGINS
+        value: "*"
+      # Absolute URL of THIS service, used for PDF download links. Set after first deploy.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # LLM provider: "hf" or "groq".
+      - key: LLM_PROVIDER
+        value: hf
+      - key: HF_MODEL_API_TYPE
+        value: openai_compatible_chat
+      - key: HF_MODEL_BASE_URL
+        sync: false
+      - key: HF_MODEL_API_KEY
+        sync: false
+      - key: HF_MODEL_NAME
+        sync: false
+      # Optional Groq fallback.
+      - key: GROQ_API_KEY
+        sync: false
