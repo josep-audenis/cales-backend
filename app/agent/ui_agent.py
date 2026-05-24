@@ -35,7 +35,11 @@ Hard rules:
 - Keep actions minimal and ordered. Prefer 1-4 actions unless the user clearly asks for more.
 - "explanation" must be useful to a procurement analyst: describe the screen or what your actions will change and why.
 - Set requires_confirmation=true when actions mutate selection or trigger generate/submit-style buttons.
-- Output JSON only. No prose outside the JSON object."""
+- Output JSON only. No prose outside the JSON object.
+
+generate_report button rule:
+- When the user's intent is to generate, create, run, or produce a report (any phrasing), you MUST include a final action {"type": "click", "target_id": "generate_report", "reason": "<why>"} — but ONLY if "generate_report" appears in visible_controls and is not disabled.
+- Always place the generate_report click last, after any toggle actions."""
 
 
 def _build_user_message(req: UIAgentRequest) -> str:
@@ -88,7 +92,8 @@ def _sanitize(resp: UIAgentResponse, req: UIAgentRequest) -> UIAgentResponse:
         cleaned.append(a)
     prompt = req.prompt.lower()
     generate_ctl = valid_ids.get("generate_report")
-    wants_generation = "generate" in prompt and "report" in prompt
+    _generation_triggers = ("generate", "create report", "run report", "produce report", "run the report", "run analysis", "go", "run it", "do it", "submit")
+    wants_generation = any(t in prompt for t in _generation_triggers)
     already_clicks_generate = any(a.type == "click" and a.target_id == "generate_report" for a in cleaned)
     if wants_generation and generate_ctl is not None and not generate_ctl.disabled and not already_clicks_generate:
         cleaned.append(
