@@ -193,4 +193,7 @@ async def _run_with(message: str, ctx: dict[str, Any], mcp_servers: list[Any]) -
     log.info("Runner.run done in %.2fs | tool_calls=%d", dt, len(tool_calls))
     for tc in tool_calls:
         log.debug("  tool: %s args=%s", tc.get("tool"), str(tc.get("args"))[:200])
-    return AgentRunResult(answer=str(result.final_output), tool_calls=tool_calls, raw=result)
+    answer = str(result.final_output)
+    # HF models sometimes emit [SEP] as a line separator token — normalise to newline.
+    answer = answer.replace("[SEP]", "\n").strip()
+    return AgentRunResult(answer=answer, tool_calls=tool_calls, raw=result)
