@@ -445,11 +445,14 @@ def _render(resp: AnalyzeResponse) -> bytes:
     rec = resp.recommendation
     spot = resp.market_context.spot_price
     spot_str = f"{spot.value:,.2f} {spot.unit}" if spot else "—"
+    coverage_str = f"{rec.current_coverage_months:.1f} mo" if rec.current_coverage_months is not None else "—"
+    mtb_str = f"{rec.months_to_buy} mo" if rec.months_to_buy is not None else "—"
+    forecast_str = f"{resp.forecast.expected_change_pct:+.1f}%"
     info_rows = [
-        ["Recommendation", rec.action, "Confidence", f"{rec.confidence * 100:.0f}%"],
-        ["Horizon", f"{rec.recommended_horizon_days} days", "Spot", spot_str],
-        ["Risk score", f"{rec.risk_score:.1f} / 10", "Opportunity", f"{rec.opportunity_score:.1f} / 10"],
-        ["Generated", generated, "Material", material.capitalize()],
+        ["Recommendation", rec.action, "Horizon", f"{rec.recommended_horizon_days} days"],
+        ["Spot price", spot_str, "Forecast", forecast_str],
+        ["Coverage", coverage_str, "Months to buy", mtb_str],
+        ["Material", material.capitalize(), "Date", generated],
     ]
     info = Table(info_rows, colWidths=[3.5 * cm, 4.5 * cm, 3.5 * cm, 4.5 * cm])
     info.setStyle(

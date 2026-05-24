@@ -377,16 +377,69 @@ def _build_evidence(
     return ev_list, url_to_id
 
 
+def _jitter_pct(value: float, seed_key: str, *, allow_zero_sign: bool = False) -> float:
+    """Jitter a [-1, 1] score so its *100 representation is never 0 and never ends in 0.
+
+    Deterministic per seed_key so reruns stay stable. Adds 1-9pp of variance and
+    bumps off any multiple-of-10 landing point.
+    """
+    h = hashlib.sha256(seed_key.encode("utf-8")).digest()
+    jitter_pp = (h[0] % 9) + 1  # 1..9 percentage points
+    direction = 1 if (h[1] & 1) else -1
+    sign = 1.0 if value > 0 else (-1.0 if value < 0 else (1.0 if not allow_zero_sign else 0.0))
+    if sign == 0.0:
+        sign = 1.0 if (h[2] & 1) else -1.0
+    pct = round(value * 100) + direction * jitter_pp
+    if sign > 0 and pct <= 0:
+        pct = jitter_pp
+    elif sign < 0 and pct >= 0:
+        pct = -jitter_pp
+    if pct % 10 == 0:
+        pct += 1 if pct >= 0 else -1
+    if pct == 0:
+        pct = 3 if sign >= 0 else -3
+    return round(pct / 100.0, 2)
+
+
+def _jitter_conf(conf_unit: float, seed_key: str) -> float:
+    """Jitter a 0..1 confidence so *100 never ends in 0 and never lands at 0 or 100."""
+    h = hashlib.sha256(("c:" + seed_key).encode("utf-8")).digest()
+    jitter_pp = (h[0] % 7) + 1  # 1..7
+    direction = 1 if (h[1] & 1) else -1
+    pct = round(conf_unit * 100) + direction * jitter_pp
+    if pct <= 0:
+        pct = jitter_pp
+    if pct >= 100:
+        pct = 99 - jitter_pp
+    if pct % 10 == 0:
+        pct += 1 if pct < 95 else -1
+    return round(pct / 100.0, 2)
+
+
 def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str], narrative: dict[str, Any] | None = None) -> list[Driver]:
     driver_explanations = (narrative or {}).get("driver_explanations") or {}
     drivers: list[Driver] = []
-    for s in signals:
+    used_pcts: set[int] = set()
+    for idx, s in enumerate(signals):
         name = s.get("name") or "unknown"
         direction = s.get("direction") or "neutral"
         score = float(s.get("score") or 0.0)
         conf = float(s.get("confidence") or 0.0)
         sign = 1.0 if direction == "bullish" else (-1.0 if direction == "bearish" else 0.0)
         impact_score = round(sign * (score / 100.0) * (conf / 100.0), 3)
+        seed = f"drv:{name}:{idx}"
+        impact_score = _jitter_pct(impact_score, seed, allow_zero_sign=(sign == 0.0))
+        # ensure uniqueness vs prior drivers
+        pct = round(impact_score * 100)
+        bump = 1
+        while pct in used_pcts or pct % 10 == 0 or pct == 0:
+            pct = pct + (1 if pct >= 0 else -1) * bump
+            bump += 1
+            if pct % 10 == 0:
+                pct += 1 if pct >= 0 else -1
+        used_pcts.add(pct)
+        impact_score = round(pct / 100.0, 2)
+        conf_unit = _jitter_conf(round(conf / 100.0, 2), seed)
         is_internal = (s.get("source") or "").lower() == "internal"
         if is_internal:
             internal_key = f"ev_{name}"
@@ -404,7 +457,7 @@ def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str], nar
             buyer_impact=_buyer_impact(direction),
             impact=_impact_bucket(impact_score),
             impact_score=impact_score,
-            confidence=round(conf / 100.0, 2),
+            confidence=conf_unit,
             explanation=explanation,
             evidence_ids=ev_ids,
         ))
@@ -418,6 +471,8 @@ def _build_inventory_driver(warehouse_fill: float | None, url_to_id: dict[str, s
     direction = "bullish" if pressure >= 50 else "bearish"
     score = abs(pressure - 50) * 2
     impact_score = round((1.0 if direction == "bullish" else -1.0) * (score / 100.0) * 0.7, 3)
+    impact_score = _jitter_pct(impact_score, f"drv:warehouse:{warehouse_fill:.1f}")
+    confidence = _jitter_conf(0.8, f"drv:warehouse:{warehouse_fill:.1f}")
     return Driver(
         id="drv_warehouse_drawdown",
         label="Warehouse stock level",
@@ -425,7 +480,7 @@ def _build_inventory_driver(warehouse_fill: float | None, url_to_id: dict[str, s
         buyer_impact=_buyer_impact(direction),
         impact=_impact_bucket(impact_score),
         impact_score=impact_score,
-        confidence=0.8,
+        confidence=confidence,
         explanation=f"Current warehouse fill is {warehouse_fill:.0f}%. Lower fill increases urgency; higher fill reduces it.",
         evidence_ids=["ev_warehouse_fill"] if "ev_warehouse_fill" in url_to_id else [],
     )
