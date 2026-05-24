@@ -133,6 +133,17 @@ class Evidence(BaseModel):
     used_for: list[str] = Field(default_factory=list)
 
 
+PlaceImpact = Literal["positive", "negative", "neutral"]
+
+
+class AffectedPlace(BaseModel):
+    name: str
+    description: str
+    lat: float
+    lng: float
+    impact: PlaceImpact
+
+
 class ChangeCondition(BaseModel):
     condition: str
     likely_shift: str
@@ -144,6 +155,17 @@ class WatchItem(BaseModel):
     item: str
     why: str
     evidence_source_ids: list[str] = Field(default_factory=list)
+
+
+class ExecutiveNarrative(BaseModel):
+    """Long-form executive prose. Optional — degrades gracefully if absent."""
+    headline: str = ""
+    market_overview: str = ""
+    supply_demand_landscape: str = ""
+    recommendation_rationale: str = ""
+    risk_assessment: str = ""
+    outlook: str = ""
+    methodology_note: str = ""
 
 
 class DataQuality(BaseModel):
@@ -174,5 +196,7 @@ class AnalyzeResponse(BaseModel):
     evidence: list[Evidence]
     what_would_change_the_recommendation: list[ChangeCondition]
     what_to_monitor: list[WatchItem]
+    affected_places: list[AffectedPlace] = Field(default_factory=list)
     limitations: list[str]
     audit_trail: AuditTrail
+    executive_narrative: ExecutiveNarrative | None = None

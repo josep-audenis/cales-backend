@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.analyze_response import (
+    AffectedPlace,
     BuyerImpact,
     Driver,
     ForecastBlock,
@@ -70,6 +71,7 @@ class ReportJson(BaseModel):
     drivers: list[Driver]
     evidence: list[WebsiteEvidence]
     what_to_monitor: list[WatchItem]
+    affected_places: list[AffectedPlace] = Field(default_factory=list)
 
 
 class ExecutivePdf(BaseModel):

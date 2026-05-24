@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.schemas.analyze_response import (
+    AffectedPlace,
     AnalyzeResponse,
     AuditTrail,
     ChangeCondition,
@@ -17,6 +18,7 @@ from app.schemas.analyze_response import (
     DataQuality,
     Driver,
     Evidence,
+    ExecutiveNarrative,
     ForecastBlock,
     GraphPoint,
     Explainability,
@@ -638,6 +640,25 @@ def _build_watch(drivers: list[Driver], narrative: dict[str, Any] | None = None,
     ]
 
 
+def _build_affected_places(narrative: dict[str, Any] | None) -> list[AffectedPlace]:
+    raw = (narrative or {}).get("affected_places") or []
+    out: list[AffectedPlace] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(AffectedPlace(
+                name=item["name"],
+                description=item.get("description") or "",
+                lat=float(item["lat"]),
+                lng=float(item["lng"]),
+                impact=item.get("impact") or "neutral",
+            ))
+        except Exception:
+            log.warning("skipping malformed affected_place: %s", item)
+    return out
+
+
 def _spot_url_for(material: str) -> str | None:
     return {
         "aluminium": "https://www.lme.com/en/metals/non-ferrous/lme-aluminium",
@@ -792,6 +813,7 @@ def build_analyze_response(
     reasoning = _build_reasoning(drivers, action, material)
     changes = _build_change_conditions(drivers, action)
     watch = _build_watch(drivers, narrative=narrative, url_to_id=url_to_id)
+    affected_places = _build_affected_places(narrative)
 
     tools_called = sorted({tc.get("tool") for tc in tool_calls if tc.get("tool")})
     audit = AuditTrail(
@@ -810,6 +832,23 @@ def build_analyze_response(
         "This is a procurement decision aid, not financial advice.",
     ]
 
+    exec_narr_raw = (narrative or {}).get("executive_narrative") if isinstance(narrative, dict) else None
+    exec_narr: ExecutiveNarrative | None = None
+    if isinstance(exec_narr_raw, dict):
+        try:
+            exec_narr = ExecutiveNarrative(
+                headline=str(exec_narr_raw.get("headline") or "").strip(),
+                market_overview=str(exec_narr_raw.get("market_overview") or "").strip(),
+                supply_demand_landscape=str(exec_narr_raw.get("supply_demand_landscape") or "").strip(),
+                recommendation_rationale=str(exec_narr_raw.get("recommendation_rationale") or "").strip(),
+                risk_assessment=str(exec_narr_raw.get("risk_assessment") or "").strip(),
+                outlook=str(exec_narr_raw.get("outlook") or "").strip(),
+                methodology_note=str(exec_narr_raw.get("methodology_note") or "").strip(),
+            )
+        except Exception:
+            log.warning("malformed executive_narrative — dropping")
+            exec_narr = None
+
     return AnalyzeResponse(
         schema_version="1.0",
         analysis_type=analysis_type if analysis_type in ("base_case", "stress_test", "what_if") else "base_case",
@@ -826,6 +865,8 @@ def build_analyze_response(
         evidence=evidence,
         what_would_change_the_recommendation=changes,
         what_to_monitor=watch,
+        affected_places=affected_places,
         limitations=limitations,
         audit_trail=audit,
+        executive_narrative=exec_narr,
     )

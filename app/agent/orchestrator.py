@@ -429,7 +429,10 @@ async def run_orchestrator(message: str, ctx: dict[str, Any]) -> OrchestratorRes
         f"FORECAST={json.dumps(slim_decision.get('scores', {}))}\n"
         f"Produce driver_explanations for each of: {signal_names}.\n"
         f"Produce price_path_summaries and price_path_plain_language for: base_case, worst_case, relief_case.\n"
-        f"Produce 3-5 what_to_monitor items grounded in the signals and evidence URLs above.\n"
+        f"Produce 4-6 what_to_monitor items grounded in the signals and evidence URLs above.\n"
+        f"Produce the executive_narrative block (headline + 6 long paragraphs) for an "
+        f"executive PDF report. Each paragraph 6-10 sentences. Cite evidence inline as [N] "
+        f"using the order of EVIDENCE_URLS.\n"
     )
     narrative: dict[str, Any] = {}
     t_narr = time.perf_counter()

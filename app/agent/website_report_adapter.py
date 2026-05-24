@@ -75,6 +75,7 @@ def to_website_report(
             for e in resp.evidence
         ],
         what_to_monitor=resp.what_to_monitor,
+        affected_places=resp.affected_places,
     )
 
     return WebsiteReportResponse(
