@@ -269,21 +269,26 @@ def _cala_disruption_scan_impl(material: str, year: int = 2026) -> dict[str, Any
     direction = Direction.NEUTRAL.value
     score = 40.0
 
-    for q in [
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+    queries = [
         f"{name} supply disruption geopolitical risk {year}",
         f"{name} supply chain shortage sanctions {year}",
-    ]:
-        try:
-            data = _knowledge_search(q)
-        except Exception:
-            log.exception("disruption_scan query failed: %s", q)
-            continue
-        for url in _extract_urls(data):
-            if url not in evidence_urls:
-                evidence_urls.append(url)
-        d, s = _score_from_explainability(data, _DISRUPTION_BULLISH, _DISRUPTION_BEARISH)
-        if s > score:
-            direction, score = d, s
+    ]
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        futs = {pool.submit(_knowledge_search, q): q for q in queries}
+        for fut in _as_completed(futs):
+            q = futs[fut]
+            try:
+                data = fut.result()
+            except Exception:
+                log.exception("disruption_scan query failed: %s", q)
+                continue
+            for url in _extract_urls(data):
+                if url not in evidence_urls:
+                    evidence_urls.append(url)
+            d, s = _score_from_explainability(data, _DISRUPTION_BULLISH, _DISRUPTION_BEARISH)
+            if s > score:
+                direction, score = d, s
 
     evidence_urls = evidence_urls[:6]
     sig = _signal(
@@ -348,24 +353,24 @@ def cala_weather_signal(material: str, region: str = "Europe", year: int = 2025)
 
 def _cala_dynamic_signals_impl(material: str, region: str = "Europe", year: int = 2026) -> dict[str, Any]:
     from app.features.driver_registry import get_material_drivers
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     drivers = get_material_drivers(material)
-    signals = []
+    if not drivers:
+        return {"signals": []}
 
-    for d_key, d_conf in drivers.items():
+    def _fetch_driver(d_key: str, d_conf: dict[str, Any]) -> dict[str, Any] | None:
         q = d_conf["query_template"].format(region=region, year=year)
         try:
             data = _knowledge_search(q)
         except Exception:
             log.exception("dynamic signal failed for %s", d_key)
-            continue
-
+            return None
         evidence_urls = _extract_urls(data)[:5]
         bullish_kw = tuple(d_conf.get("bullish_keywords") or ())
         bearish_kw = tuple(d_conf.get("bearish_keywords") or ())
         direction, score = _score_from_explainability(data, bullish_kw, bearish_kw)
-
-        sig = _signal(
+        return _signal(
             name=d_conf["weight_key"],
             direction=direction,
             score=score,
@@ -374,8 +379,18 @@ def _cala_dynamic_signals_impl(material: str, region: str = "Europe", year: int 
             evidence=evidence_urls,
             extra={"region": region, "year": year, "driver_key": d_key},
         )
-        signals.append(sig)
-        
+
+    signals = []
+    with ThreadPoolExecutor(max_workers=min(len(drivers), 6)) as pool:
+        futures = {pool.submit(_fetch_driver, k, v): k for k, v in drivers.items()}
+        for fut in as_completed(futures):
+            try:
+                sig = fut.result()
+                if sig:
+                    signals.append(sig)
+            except Exception:
+                log.exception("dynamic signal future failed for %s", futures[fut])
+
     return {"signals": signals}
 
 
@@ -387,28 +402,47 @@ def cala_dynamic_signals(material: str, region: str = "Europe", year: int = 2026
 
 def gather_cala_signals(material: str, region: str = "Europe", year: int = 2026) -> dict[str, Any]:
     """Deterministic synchronous gather of all Cala signals + evidence URLs. No LLM."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tasks: dict[str, Any] = {
+        "producer": lambda: _cala_producer_graph_impl(material),
+        "disruption": lambda: _cala_disruption_scan_impl(material, year=year),
+        "dynamic": lambda: _cala_dynamic_signals_impl(material, region=region, year=year),
+    }
+    if material in {"barley", "wheat"}:
+        tasks["weather"] = lambda: _cala_weather_signal_impl(material, region=region, year=year - 1)
+
+    results: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = {pool.submit(fn): key for key, fn in tasks.items()}
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                results[key] = fut.result()
+            except Exception:
+                log.exception("cala task %s failed", key)
+                results[key] = {}
+
     signals: list[dict[str, Any]] = []
     evidence_urls: list[str] = []
 
-    prod = _cala_producer_graph_impl(material)
-    if prod and prod.get("signal"):
+    prod = results.get("producer") or {}
+    if prod.get("signal"):
         signals.append(prod["signal"])
         evidence_urls.extend(prod["signal"].get("evidence") or [])
 
-    disr = _cala_disruption_scan_impl(material, year=year)
-    if disr and disr.get("signal"):
+    disr = results.get("disruption") or {}
+    if disr.get("signal"):
         signals.append(disr["signal"])
 
-    if material in {"barley", "wheat"}:
-        wx = _cala_weather_signal_impl(material, region=region, year=year - 1)
-        if wx and wx.get("signal"):
-            signals.append(wx["signal"])
+    wx = results.get("weather") or {}
+    if wx.get("signal"):
+        signals.append(wx["signal"])
 
-    dyn = _cala_dynamic_signals_impl(material, region=region, year=year)
+    dyn = results.get("dynamic") or {}
     for s in dyn.get("signals") or []:
         signals.append(s)
 
-    # dedupe URLs
     seen: set[str] = set()
     deduped: list[str] = []
     for u in evidence_urls:

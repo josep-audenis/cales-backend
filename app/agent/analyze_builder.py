@@ -375,7 +375,8 @@ def _build_evidence(
     return ev_list, url_to_id
 
 
-def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str]) -> list[Driver]:
+def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str], narrative: dict[str, Any] | None = None) -> list[Driver]:
+    driver_explanations = (narrative or {}).get("driver_explanations") or {}
     drivers: list[Driver] = []
     for s in signals:
         name = s.get("name") or "unknown"
@@ -390,6 +391,10 @@ def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str]) -> 
             ev_ids = [internal_key] if internal_key in url_to_id else []
         else:
             ev_ids = [url_to_id[u] for u in (s.get("evidence") or []) if u in url_to_id]
+        explanation = (
+            driver_explanations.get(name)
+            or SIGNAL_EXPLANATIONS.get(name, f"Signal: {name}")
+        )
         drivers.append(Driver(
             id=_drv_id(name),
             label=SIGNAL_LABELS.get(name, name.replace("_", " ").capitalize()),
@@ -398,7 +403,7 @@ def _build_drivers(signals: list[dict[str, Any]], url_to_id: dict[str, str]) -> 
             impact=_impact_bucket(impact_score),
             impact_score=impact_score,
             confidence=round(conf / 100.0, 2),
-            explanation=SIGNAL_EXPLANATIONS.get(name, f"Signal: {name}"),
+            explanation=explanation,
             evidence_ids=ev_ids,
         ))
     return drivers
@@ -444,6 +449,7 @@ def _build_price_paths(
     summary: dict[str, Any],
     drivers: list[Driver],
     url_to_id: dict[str, str],
+    narrative: dict[str, Any] | None = None,
 ) -> list[PricePath]:
     if not forecast_points or anchor_price is None or anchor_date is None:
         return []
@@ -462,6 +468,9 @@ def _build_price_paths(
     bullish_ev = list({eid for d in bullish_drivers for eid in d.evidence_ids})
     bearish_ev = list({eid for d in bearish_drivers for eid in d.evidence_ids})
 
+    path_summaries = (narrative or {}).get("price_path_summaries") or {}
+    path_plain = (narrative or {}).get("price_path_plain_language") or {}
+
     base_path = PricePath(
         id="base_case",
         label="Base case",
@@ -471,7 +480,7 @@ def _build_price_paths(
             "bullish" if base_change > 0 else ("bearish" if base_change < 0 else "neutral"),
             min(abs(base_change) * 5, 100),
         ),
-        summary="Current signals continue without a major new shock.",
+        summary=path_summaries.get("base_case") or "Current signals continue without a major new shock.",
         expected_change_pct=base_change,
         range_low_pct=low_change,
         range_high_pct=high_change,
@@ -479,7 +488,7 @@ def _build_price_paths(
         evidence_ids=all_ev,
         graph_points=_sample_points(forecast_points, anchor_price, anchor_date, "median"),
         explainability=Explainability(
-            plain_language="Base path reflects the weighted balance of all current signals.",
+            plain_language=path_plain.get("base_case") or "Base path reflects the weighted balance of all current signals.",
             click_title="Why the base path moves this way",
             click_evidence_ids=all_ev[:5],
         ),
@@ -492,7 +501,7 @@ def _build_price_paths(
         graph_line_key="upside",
         buyer_impact="negative",
         direction="strong_upward_price_pressure",
-        summary="Bullish drivers compound: price moves toward the upper band.",
+        summary=path_summaries.get("worst_case") or "Bullish drivers compound: price moves toward the upper band.",
         expected_change_pct=worst_change,
         range_low_pct=base_change,
         range_high_pct=high_change,
@@ -500,7 +509,7 @@ def _build_price_paths(
         evidence_ids=bullish_ev or all_ev,
         graph_points=_sample_points(forecast_points, anchor_price, anchor_date, "upper"),
         explainability=Explainability(
-            plain_language="Bad-news path: upside drivers dominate and price climbs faster.",
+            plain_language=path_plain.get("worst_case") or "Bad-news path: upside drivers dominate and price climbs faster.",
             click_title="Why the worst-case line is higher",
             click_evidence_ids=(bullish_ev or all_ev)[:5],
         ),
@@ -513,7 +522,7 @@ def _build_price_paths(
         graph_line_key="downside",
         buyer_impact="positive",
         direction="downward_price_pressure",
-        summary="Bearish drivers dominate: price drifts toward the lower band.",
+        summary=path_summaries.get("relief_case") or "Bearish drivers dominate: price drifts toward the lower band.",
         expected_change_pct=relief_change,
         range_low_pct=low_change,
         range_high_pct=base_change,
@@ -521,7 +530,7 @@ def _build_price_paths(
         evidence_ids=bearish_ev or all_ev,
         graph_points=_sample_points(forecast_points, anchor_price, anchor_date, "lower"),
         explainability=Explainability(
-            plain_language="Good-news path: downside drivers reduce buying pressure.",
+            plain_language=path_plain.get("relief_case") or "Good-news path: downside drivers reduce buying pressure.",
             click_title="Why the relief-case line is lower",
             click_evidence_ids=(bearish_ev or all_ev)[:5],
         ),
@@ -603,16 +612,30 @@ def _build_change_conditions(drivers: list[Driver], action: str) -> list[ChangeC
     return out
 
 
-def _build_watch(drivers: list[Driver]) -> list[WatchItem]:
-    out: list[WatchItem] = []
+def _build_watch(drivers: list[Driver], narrative: dict[str, Any] | None = None, url_to_id: dict[str, str] | None = None) -> list[WatchItem]:
+    narr_items = (narrative or {}).get("what_to_monitor")
+    if narr_items and isinstance(narr_items, list):
+        out: list[WatchItem] = []
+        for item in narr_items:
+            if not isinstance(item, dict):
+                continue
+            ev_ids: list[str] = []
+            ev_url = item.get("evidence_url") or ""
+            if ev_url and url_to_id and ev_url in url_to_id:
+                ev_ids = [url_to_id[ev_url]]
+            out.append(WatchItem(
+                item=item.get("item") or "",
+                why=item.get("why") or "",
+                evidence_source_ids=ev_ids,
+            ))
+        if out:
+            return out
+    # fallback: mechanical from top drivers
     strong = sorted(drivers, key=lambda d: abs(d.impact_score), reverse=True)[:3]
-    for d in strong:
-        out.append(WatchItem(
-            item=d.label,
-            why=d.explanation,
-            evidence_source_ids=d.evidence_ids[:3],
-        ))
-    return out
+    return [
+        WatchItem(item=d.label, why=d.explanation, evidence_source_ids=d.evidence_ids[:3])
+        for d in strong
+    ]
 
 
 def _spot_url_for(material: str) -> str | None:
@@ -645,6 +668,7 @@ def build_analyze_response(
     spot_date: Any | None,
     tool_calls: list[dict[str, Any]] | None,
     answer_text: str,
+    narrative: dict[str, Any] | None = None,
 ) -> AnalyzeResponse:
     decision = decision or {}
     signals = signals or []
@@ -670,7 +694,7 @@ def build_analyze_response(
         warehouse_fill_raw = context_flags.get("warehouse_fill_pct") if isinstance(context_flags.get("warehouse_fill_pct"), (int, float)) else None
     evidence, url_to_id = _build_evidence(signals, evidence_urls, spot_url, today, warehouse_fill=warehouse_fill_raw)
 
-    drivers = _build_drivers(signals, url_to_id)
+    drivers = _build_drivers(signals, url_to_id, narrative=narrative)
     warehouse_fill = warehouse_fill_raw
     inv_driver = _build_inventory_driver(warehouse_fill if isinstance(warehouse_fill, (int, float)) else None, url_to_id)
     if inv_driver:
@@ -686,6 +710,7 @@ def build_analyze_response(
         summary=summary_forecast,
         drivers=drivers,
         url_to_id=url_to_id,
+        narrative=narrative,
     )
 
     _link_evidence_back(evidence, drivers, price_paths)
@@ -766,7 +791,7 @@ def build_analyze_response(
 
     reasoning = _build_reasoning(drivers, action, material)
     changes = _build_change_conditions(drivers, action)
-    watch = _build_watch(drivers)
+    watch = _build_watch(drivers, narrative=narrative, url_to_id=url_to_id)
 
     tools_called = sorted({tc.get("tool") for tc in tool_calls if tc.get("tool")})
     audit = AuditTrail(

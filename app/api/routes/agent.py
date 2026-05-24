@@ -95,6 +95,7 @@ async def _run_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         spot_date=result.spot_date,
         tool_calls=result.tool_calls,
         answer_text=result.answer,
+        narrative=result.narrative,
     )
 
 

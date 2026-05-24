@@ -51,3 +51,4 @@ scripts/
 scratch/
 .before_deploy*
 .timesfm
+test.json

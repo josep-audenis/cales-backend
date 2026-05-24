@@ -34,6 +34,7 @@ from app.agent.prompts import (
     CALA_SIGNAL_AGENT_SYSTEM,
     EXPLANATION_AGENT_SYSTEM,
     FUNDAMENTALS_AGENT_SYSTEM,
+    NARRATIVE_AGENT_SYSTEM,
 )
 from app.agent.tools import (
     FUNDAMENTALS_TOOLS,
@@ -83,6 +84,7 @@ class OrchestratorResult:
     forecast_points: list[dict[str, Any]] | None = None
     spot_price: float | None = None
     spot_date: Any | None = None
+    narrative: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +127,15 @@ def _make_explanation_agent(mcp_servers: list[Any]) -> Any:
         model=_make_model(),
         tools=[],
         mcp_servers=mcp_servers,
+    )
+
+
+def _make_narrative_agent() -> Any:
+    return Agent(
+        name="NarrativeAgent",
+        instructions=NARRATIVE_AGENT_SYSTEM,
+        model=_make_model(),
+        tools=[],
     )
 
 
@@ -407,8 +418,32 @@ async def run_orchestrator(message: str, ctx: dict[str, Any]) -> OrchestratorRes
         f"Mention it in TOP DRIVERS or COUNTER-DRIVERS when it materially shifts the picture (low fill → urgency, high fill → can wait).\n"
     )
 
-    # Skip LLM Explanation entirely — structured response is built by analyze_builder.
-    # Provide a deterministic narrative string for back-compat with /agent/chat callers.
+    # ----- Phase 4: Narrative LLM — enrich driver/path/monitor text -----
+    signal_names = [s.get("name") for s in all_signals if s.get("name")]
+    narrative_prompt = (
+        f"material={material} horizon_days={horizon} action={slim_decision.get('action')} "
+        f"confidence_pct={conf_pct}\n"
+        f"SIGNAL_NAMES={json.dumps(signal_names)}\n"
+        f"SIGNALS={json.dumps(slim_signals)}\n"
+        f"EVIDENCE_URLS={json.dumps(evidence_urls[:10])}\n"
+        f"FORECAST={json.dumps(slim_decision.get('scores', {}))}\n"
+        f"Produce driver_explanations for each of: {signal_names}.\n"
+        f"Produce price_path_summaries and price_path_plain_language for: base_case, worst_case, relief_case.\n"
+        f"Produce 3-5 what_to_monitor items grounded in the signals and evidence URLs above.\n"
+    )
+    narrative: dict[str, Any] = {}
+    t_narr = time.perf_counter()
+    try:
+        if _SDK_AVAILABLE:
+            narr_agent = _make_narrative_agent()
+            narrative, _, narr_dt = await _run_subagent(narr_agent, narrative_prompt, {})
+            timings["narrative"] = narr_dt
+        else:
+            timings["narrative"] = 0.0
+    except Exception:
+        log.exception("NarrativeAgent failed — falling back to static text")
+        timings["narrative"] = time.perf_counter() - t_narr
+
     explanation_text = decision.get("explanation") or ""
     qty_line = ""
     if slim_decision.get("action") in ("BUY_NOW", "HEDGE") and slim_decision.get("months_to_buy"):
@@ -437,4 +472,5 @@ async def run_orchestrator(message: str, ctx: dict[str, Any]) -> OrchestratorRes
         forecast_points=locals().get("forecast_points_list"),
         spot_price=locals().get("spot_price_val"),
         spot_date=locals().get("spot_date_val"),
+        narrative=narrative or None,
     )

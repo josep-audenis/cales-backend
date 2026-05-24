@@ -43,6 +43,7 @@ class AgentRunResult:
     forecast_points: list[dict[str, Any]] | None = None
     spot_price: float | None = None
     spot_date: Any | None = None
+    narrative: dict[str, Any] | None = None
 
 
 def _make_model() -> Any:
@@ -135,6 +136,7 @@ async def run_agent(message: str, context: dict[str, Any] | None = None) -> Agen
                 forecast_points=orch.forecast_points,
                 spot_price=orch.spot_price,
                 spot_date=orch.spot_date,
+                narrative=orch.narrative,
             )
         except Exception:
             log.exception("Orchestrator failed — falling back to single-agent path")
